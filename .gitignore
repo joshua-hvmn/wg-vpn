@@ -1,0 +1,8 @@
+# Environment & State
+.env
+*.state
+*.log
+
+# Operating System
+.DS_Store
+thumbs.db
