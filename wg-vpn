@@ -2,8 +2,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${SCRIPT_DIR}/.env"
-STATE_FILE="${SCRIPT_DIR}/.wg-vpn.state"
+
+# XDG base dir paths
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/wg-vpn"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/wg-vpn"
+
+CONFIG_FILE="${CONFIG_DIR}/wg-vpn.conf"
+STATE_FILE="${STATE_DIR}/wg-vpn.state"
+
 ENV_VARS=(
     WG_CONFIG_DIR
     WG_CONFIG_FILE

@@ -39,14 +39,112 @@ get_env_var() {
     fi
 }
 
-load_env() {
-    [[ -f "$ENV_FILE" ]] || die "missing $ENV_FILE"
-    for var_name in "${ENV_VARS[@]}"; do
-        # get value
-        local val
-        val=$(get_env_var "$var_name" "$ENV_FILE")
+make_temp() {
+    [[ $# -eq 1 ]] || return 2
+    local target="$1"
+    local dir="${target%/*}"
+    local base="${target##*/}"
 
-        # assign variable
+    [[ -d "$dir" && -w "$dir" ]] || return 1
+
+    local umask_old
+    umask_old=$(umask)
+    umask 077
+
+    local tmp_file
+    if command -v mktemp >/dev/null 2>&1; then
+        tmp_file=(mktemp "$dir/.$base.XXXXXX") || {
+            umask "$umask_old"
+            return 1
+        }
+    else
+        # Bash fallback
+        tmp_file="$dir/.$base.$$.$RANDOM"
+        set -C
+        >"$tmp_file" 2>/dev/null || {
+            umask "$umask_old"
+            return 1
+        }
+        set +C
+        chmod 600 "$tmp_file"
+    fi
+
+    umask "$umask_old"
+    printf '%s\n' "$tmp_file"
+}
+
+edit_kv() {
+    [[ $# -ge 2 ]] || return 2
+
+    local rm_mode=0 key value target
+    if [[ "$1" == "rm" ]]; then
+        rm_mode=1
+        key="$2"
+        target="$3"
+    else
+        key="$1"
+        value="$2"
+        target="$3"
+    fi
+
+    [[ -n "$target" ]] || return 1
+    local dir="${target%/*}"
+    [[ -d "$dir" && -w "$dir" ]] || return 1
+    [[ -f "$target" ]] || touch -- "$target" 2>/dev/null || return 1
+
+    # Escape key for sed
+    local ekey
+    ekey=$(printf '%s' "$key" | sed 's/\\/\\\\/g; s/[][\/.^$*]/\\&/g')
+
+    local tmp
+    tmp=$(make_temp "$target") || return 1
+
+    sed "/^${ekey}=/d" "$target" >"$tmp" || {
+        rm -f -- "$tmp"
+        return 1
+    }
+
+    if [[ "$rm_mode" -eq 0 ]]; then
+        # check for newline
+        [[ -s "$tmp" && "$(tail -c 1 "$tmp" 2>/dev/null)" != $'\n' ]] && printf '\n' >>"$tmp"
+        printf '%s=%s\n' "$key" "$value" >>"$tmp" || {
+            rm -f -- "$tmp"
+            return 1
+        }
+    fi
+
+    local perms
+    perms=$(stat -c %a "$target" 2>/dev/null || printf '600')
+    chmod "$perms" "$tmp"
+    mv -f -- "$tmp" "$target" || {
+        rm -f -- "$tmp"
+        return 1
+    }
+}
+
+init_config() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        info "First run detected. Initializing configuration."
+        mkdir -p "${CONFIG_FILE%/*}"
+
+        local wg_dir wg_file
+        read -r -p "Enter Wireguard config directory (e.g., /etc/wireguard/): " wg_dir
+        read -r -p "Enter default config file (e.g., us1.conf): " wg_file
+
+        edit_kv "$WG_CONFIG_DIR" "$wg_dir" "$CONFIG_FILE"
+        edit_kv "$WG_CONFIG_FILE" "$wg_file" "$CONFIG_FILE"
+
+        info "Configuration saved to $CONFIG_FILE"
+    fi
+}
+
+load_env() {
+    init_config
+
+    [[ -f "$CONFIG_FILE" ]] || die "missing $CONFIG_FILE"
+    for var_name in "${ENV_VARS[@]}"; do
+        local val
+        val=$(get_env_var "$var_name" "$CONFIG_FILE")
         declare -g -x "$var_name=$val"
     done
 
@@ -121,6 +219,7 @@ write_state_file() {
     [[ -z "$WG_IFACE" ]] && WG_IFACE="$CONNECTION_NAME" # Fallback just in case
 
     # Save state
+    mkdir -p "${STATE_FILE%/*}"
     cat <<EOF >"$STATE_FILE"
 ENDPOINT_IP="$ENDPOINT_IP"
 ENDPOINT_PORT="$ENDPOINT_PORT"
