@@ -29,6 +29,6 @@ Commands:
   status, ps    Show current state
 
 Configuration lives in:
-  $ENV_FILE
+  $CONFIG_FILE
 EOF
 }

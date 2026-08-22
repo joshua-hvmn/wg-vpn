@@ -13,6 +13,29 @@ info() {
     printf '→ %s\n' "$*"
 }
 
+## [Y/n]
+#  - Move the '' to the no section to change to default no.
+yes_no() {
+    local msg="${1:-''}"
+    local response
+    while true; do
+        echo "$msg [Y/n]: " >&2
+        read -r response
+
+        case "$response" in
+        n | N | [nN]o | [nN]O | [nN][oO])
+            return 1
+            ;;
+        '' | [yY] | [yY]es | [yY][eE][sS])
+            return 0
+            ;;
+        *)
+            info "Invalid response: $response"
+            ;;
+        esac
+    done
+}
+
 ## Get environment variable value from file
 #  - USAGE: 'get_env_var <KEY> <FILE>'
 #  Checks current shell for the variable, then searches the file
@@ -53,7 +76,7 @@ make_temp() {
 
     local tmp_file
     if command -v mktemp >/dev/null 2>&1; then
-        tmp_file=(mktemp "$dir/.$base.XXXXXX") || {
+        tmp_file=$(mktemp "$dir/.$base.XXXXXX") || {
             umask "$umask_old"
             return 1
         }
@@ -123,33 +146,66 @@ edit_kv() {
 }
 
 init_config() {
+    local is_first_run=0
+    local needs_setup=0
+
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        info "First run detected. Initializing configuration."
+        is_first_run=1
+        needs_setup=1
+        info "First run detected / Config Missing."
+        info "Initializing configuration."
+    else
+        for key in "${!ENV_VARS[@]}"; do
+            if [[ -z "$(get_env_var "$key" "$CONFIG_FILE")" ]]; then
+                needs_setup=1
+                info "Configuration exists but is missing required variable: $key"
+                break # if I remove this, will it show all missing variables, and continue when it reads all of them
+            fi
+        done
+    fi
+
+    [[ "$needs_setup" -eq 0 ]] && return 0
+
+    if yes_no "Would you like to configure wg-vpn now?"; then
         mkdir -p "${CONFIG_FILE%/*}"
 
-        local wg_dir wg_file
-        read -r -p "Enter Wireguard config directory (e.g., /etc/wireguard/): " wg_dir
-        read -r -p "Enter default config file (e.g., us1.conf): " wg_file
+        for key in "${!ENV_VARS[@]}"; do
+            local desc="${ENV_VARS[$key]}"
+            local current_val=""
 
-        edit_kv "$WG_CONFIG_DIR" "$wg_dir" "$CONFIG_FILE"
-        edit_kv "$WG_CONFIG_FILE" "$wg_file" "$CONFIG_FILE"
+            [[ "$is_first_run" -eq 0 ]] && current_val=$(get_env_var "$key" "$CONFIG_FILE")
 
+            local prompt_suffix=""
+            [[ -n "$current_val" ]] && prompt_suffix=" [$current_val]"
+
+            local user_val
+            read -r -p "Enter $desc${prompt_suffix}: " user_val
+
+            user_val="${user_val:-$current_val}"
+
+            if [[ -n "$user_val" ]]; then
+                edit_kv "$key" "$user_val" "$CONFIG_FILE"
+            fi
+        done
         info "Configuration saved to $CONFIG_FILE"
+    else
+        die "Setup aborted. wg-vpn cannot proceed without required variables."
     fi
+
 }
 
 load_env() {
     init_config
 
     [[ -f "$CONFIG_FILE" ]] || die "missing $CONFIG_FILE"
-    for var_name in "${ENV_VARS[@]}"; do
+    for var_name in "${!ENV_VARS[@]}"; do
         local val
         val=$(get_env_var "$var_name" "$CONFIG_FILE")
         declare -g -x "$var_name=$val"
     done
 
-    [[ -n "${WG_CONFIG_DIR:-}" ]] || die "WG_CONFIG_DIR not set in .env"
-    [[ -n "${WG_CONFIG_FILE:-}" ]] || die "WG_CONFIG_FILE not set in .env"
+    [[ -n "${WG_CONFIG_DIR:-}" ]] || die "WG_CONFIG_DIR not set in $CONFIG_FILE"
+    [[ -n "${WG_CONFIG_FILE:-}" ]] || die "WG_CONFIG_FILE not set in $CONFIG_FILE"
 
     CONFIG_PATH="${WG_CONFIG_DIR%/}/${WG_CONFIG_FILE}"
     [[ -f "$CONFIG_PATH" ]] || die "config file not found: $CONFIG_PATH"

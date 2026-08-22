@@ -10,9 +10,9 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/wg-vpn"
 CONFIG_FILE="${CONFIG_DIR}/wg-vpn.conf"
 STATE_FILE="${STATE_DIR}/wg-vpn.state"
 
-ENV_VARS=(
-    WG_CONFIG_DIR
-    WG_CONFIG_FILE
+declare -A ENV_VARS=(
+    [WG_CONFIG_DIR]="Wireguard config directory (e.g., /etc/wireguard/)"
+    [WG_CONFIG_FILE]="default config file (e.g., us1.conf)"
 )
 DEPENDENCIES=(
     "nmcli"
