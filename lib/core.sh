@@ -159,7 +159,6 @@ init_config() {
             if [[ -z "$(get_env_var "$key" "$CONFIG_FILE")" ]]; then
                 needs_setup=1
                 info "Configuration exists but is missing required variable: $key"
-                break # if I remove this, will it show all missing variables, and continue when it reads all of them
             fi
         done
     fi
@@ -203,6 +202,25 @@ load_env() {
         val=$(get_env_var "$var_name" "$CONFIG_FILE")
         declare -g -x "$var_name=$val"
     done
+
+    local subnets_file="${CONFIG_DIR}/subnets.list"
+    if [[ ! -f "$subnets_file" ]]; then
+        info "Generating default private subnets list..."
+        cat <<EOF >"$subnets_file"
+# Local network subnets to bypass the VPN kill-switch
+# Add or remove CIDR ranges below as needed.
+10.0.0.0/8
+172.16.0.0/12
+192.168.0.0/16
+EOF
+    fi
+
+    declare -g -a PRIVATE_SUBNETS=()
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}" # Strip comments
+        line="${line// /}" # Strip whitespaces
+        [[ -n "$line" ]] && PRIVATE_SUBNETS+=("$line")
+    done <"$subnets_file"
 
     [[ -n "${WG_CONFIG_DIR:-}" ]] || die "WG_CONFIG_DIR not set in $CONFIG_FILE"
     [[ -n "${WG_CONFIG_FILE:-}" ]] || die "WG_CONFIG_FILE not set in $CONFIG_FILE"

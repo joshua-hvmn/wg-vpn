@@ -54,6 +54,7 @@ cmd_toggle_on() {
 
 cmd_toggle_off() {
     check_deps
+    load_env
 
     if [[ ! -f "$STATE_FILE" ]]; then
         die "State file missing ($STATE_FILE). Cannot safely determine which UFW rules to delete."
@@ -70,7 +71,7 @@ cmd_toggle_off() {
 
     disable_ipv6 0
 
-    for subnet in "${PRIVATE_SUBNETS[@]}"; do
+    for subnet in "${PRIVATE_SUBNETS[@]}"; do # risk of drift, append active to STATE on cmd on, read from STATE on cmd off
         sudo ufw delete allow out to "$subnet" 2>/dev/null || true
     done
 
