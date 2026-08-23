@@ -13,6 +13,41 @@ info() {
     printf '→ %s\n' "$*"
 }
 
+## Gather all values for given a key in a given map file into a global array
+# USAGE: get_env_array <KEY> <FILE> <TARGET_ARRAY_NAME>
+get_env_array() {
+    local key="$1"
+    local file="$2"
+    local target_name="$3"
+
+    declare -g -a "$target_name"
+    declare -n _ref="$target_name"
+    _ref=()
+
+    [[ -f "$file" ]] || return 1
+
+    local k v
+    while IFS='=' read -r k v || [[ -n "$k" ]]; do
+        # Strip key whitespaces
+        k="${k// /}"
+
+        # Skip comments, empty lines, non-matches
+        [[ -z "$k" || "$k" == \#* || "$k" != "$key" ]] && continue
+
+        # Strip quotes
+        v="${v#\"}"
+        v="${v%\"}"
+        v="${v#\'}"
+        v="${v%\'}"
+
+        # Strip value whitespaces
+        v="${v#"${v%%[![:space:]]*}"}"
+        v="${v%"${v##*[![:space:]]}"}"
+
+        [[ -n "$v" ]] && _ref+=("$v")
+    done <"$file"
+}
+
 ## [Y/n]
 #  - Move the '' to the no section to change to default no.
 yes_no() {
