@@ -28,15 +28,14 @@ cmd_toggle_on() {
     # allow handshake to vpn
     sudo ufw allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp
 
+    trap 'info "Interrupted. Rolling back firewall..."; sudo ufw default "$PREV_UFW_POLICY" outgoing; disable_ipv6 0; sudo ufw reload' EXIT
+
     info "Bringing connection up"
     if ! nmcli connection up "$CONNECTION_NAME"; then
-        info "Connection failed. Rolling back firewall..."
-        sudo ufw delete allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp 2>/dev/null || true
-        sudo ufw default "$PREV_UFW_POLICY" outgoing
-        disable_ipv6 0
-        sudo ufw reload
         die "Failed to bring up VPN connection."
     fi
+
+    trap - EXIT
 
     write_state_file
 
@@ -44,8 +43,9 @@ cmd_toggle_on() {
     sudo ufw allow out on "$WG_IFACE"
 
     # local/private ranges
-    for subnet in "${PRIVATE_SUBNETS[@]}"; do
+    for subnet in "${ALLOWED_SUBNETS[@]}"; do
         sudo ufw allow out to "$subnet"
+        echo "ALLOWED_SUBNET=\"$subnet\"" >>"$STATE_FILE"
     done
 
     sudo ufw reload
@@ -69,9 +69,15 @@ cmd_toggle_off() {
     sudo ufw delete allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp 2>/dev/null || true
     sudo ufw delete allow out on "$WG_IFACE" 2>/dev/null || true
 
-    disable_ipv6 0
+    if [[ -n "${PREV_IPV6_STATE:-}" ]]; then
+        disable_ipv6 "$PREV_IPV6_STATE"
+    else
+        disable_ipv6 0
+    fi
 
-    for subnet in "${PRIVATE_SUBNETS[@]}"; do # risk of drift, append active to STATE on cmd on, read from STATE on cmd off
+    get_env_array "ALLOWED_SUBNET" "$STATE_FILE" "ALLOWED_SUBNETS"
+
+    for subnet in "${ALLOWED_SUBNETS[@]}"; do
         sudo ufw delete allow out to "$subnet" 2>/dev/null || true
     done
 

@@ -54,9 +54,7 @@ yes_no() {
     local msg="${1:-''}"
     local response
     while true; do
-        echo "$msg [Y/n]: " >&2
-        read -r response
-
+        read -r -p "$msg [Y/n]: " response >&2
         case "$response" in
         n | N | [nN]o | [nN]O | [nN][oO])
             return 1
@@ -243,18 +241,19 @@ load_env() {
         info "Generating default private subnets list..."
         cat <<EOF >"$subnets_file"
 # Local network subnets to bypass the VPN kill-switch
-# Add or remove CIDR ranges below as needed.
+# These are standard CIDR local ranges.
+# Add or remove allowed IPs below as needed.
 10.0.0.0/8
 172.16.0.0/12
 192.168.0.0/16
 EOF
     fi
 
-    declare -g -a PRIVATE_SUBNETS=()
+    declare -g -a ALLOWED_SUBNETS=()
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}" # Strip comments
         line="${line// /}" # Strip whitespaces
-        [[ -n "$line" ]] && PRIVATE_SUBNETS+=("$line")
+        [[ -n "$line" ]] && ALLOWED_SUBNETS+=("$line")
     done <"$subnets_file"
 
     [[ -n "${WG_CONFIG_DIR:-}" ]] || die "WG_CONFIG_DIR not set in $CONFIG_FILE"
@@ -292,6 +291,8 @@ parse_endpoint() {
     line=$(grep -E '^\s*Endpoint\s*=' "$CONFIG_PATH" | head -1) ||
         die "no Endpoint= line found in $CONFIG_PATH"
 
+    # Strip inline comments
+    line="${line%%#*}"
     # Strip key and whitespace
     line="${line#*=}"
     line="${line// /}"
@@ -318,26 +319,42 @@ capture_pre_vpn_state() {
     PREV_UFW_POLICY=$(sudo ufw status verbose | grep -o '[a-z]* (outgoing)' | awk '{print $1}')
     [[ -z "$PREV_UFW_POLICY" ]] && PREV_UFW_POLICY="allow"
 
-    export PREV_UFW_POLICY
+    PREV_IPV6_STATE=$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo "0")
+
+    export PREV_UFW_POLICY PREV_IPV6_STATE
 }
 
 write_state_file() {
     info "Gathering active interface data..."
-
-    WG_IFACE=$(nmcli -g GENERAL.DEVICES connection show "$CONNECTION_NAME" | head -n1)
-    [[ -z "$WG_IFACE" ]] && WG_IFACE="$CONNECTION_NAME" # Fallback just in case
+    local tries=0
+    while [[ $tries -lt 5 ]]; do
+        WG_IFACE=$(nmcli -g GENERAL.DEVICES connection show "$CONNECTION_NAME" 2>/dev/null | head -n1)
+        [[ -n "$WG_IFACE" ]] && break
+        sleep 0.3
+        ((tries++)) || true
+    done
+    [[ -n "$WG_IFACE" ]] || die "could not determine interface for $CONNECTION_NAME"
 
     # Save state
     mkdir -p "${STATE_FILE%/*}"
-    cat <<EOF >"$STATE_FILE"
+    local tmp
+    tmp=$(make_temp "$STATE_FILE") || die "cannot create temp state file"
+
+    {
+        cat <<EOF
 ENDPOINT_IP="$ENDPOINT_IP"
 ENDPOINT_PORT="$ENDPOINT_PORT"
 CONNECTION_NAME="$CONNECTION_NAME"
 WG_IFACE="$WG_IFACE"
 PREV_UFW_POLICY="$PREV_UFW_POLICY"
+PREV_IPV6_STATE="$PREV_IPV6_STATE"
 EOF
-    chmod 600 "$STATE_FILE"
-
+        for subnet in "${ALLOWED_SUBNETS[@]}"; do
+            printf 'ALLOWED_SUBNET="%s"\n' "$subnet"
+        done
+    } >"$tmp"
+    chmod 600 "$tmp"
+    mv -f -- "$tmp" "$STATE_FILE"
     export WG_IFACE
 }
 
