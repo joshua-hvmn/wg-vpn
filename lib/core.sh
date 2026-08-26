@@ -13,6 +13,51 @@ info() {
     printf '→ %s\n' "$*"
 }
 
+rollback_on_error() {
+    info "An error occurred while starting the VPN, or the script was interrupted. Rolling back..."
+
+    # 1. Restore UFW default outgoing policy
+    if [[ -n "${PREV_UFW_POLICY:-}" ]]; then
+        sudo ufw default "$PREV_UFW_POLICY" outgoing >/dev/null 2>&1
+    else
+        sudo ufw default allow outgoing >/dev/null 2>&1
+    fi
+
+    # 2. Delete endpoint rule
+    if [[ -n "${ENDPOINT_IP:-}" && -n "${ENDPOINT_PORT:-}" ]]; then
+        sudo ufw delete allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp >/dev/null 2>&1 || true
+    fi
+
+    # 3. Delete interface rule
+    if [[ -n "${WG_IFACE:-}" ]]; then
+        sudo ufw delete allow out on "$WG_IFACE" >/dev/null 2>&1 || true
+    fi
+
+    # 4. Delete allowed subnets
+    if [[ "${#ALLOWED_SUBNETS[@]}" -gt 0 ]]; then
+        for subnet in "${ALLOWED_SUBNETS[@]}"; do
+            sudo ufw delete allow out to "$subnet" >/dev/null 2>&1 || true
+        done
+    fi
+
+    # 5. Restore IPv6 state
+    if command -v disable_ipv6 >/dev/null 2>&1; then
+        if [[ -n "${PREV_IPV6_STATE:-}" ]]; then
+            disable_ipv6 "$PREV_IPV6_STATE"
+        else
+            disable_ipv6 0
+        fi
+    fi
+
+    # 6. Ensure NM connection is down
+    if [[ -n "${CONNECTION_NAME:-}" ]]; then
+        nmcli connection down "$CONNECTION_NAME" >/dev/null 2>&1 || true
+    fi
+
+    sudo ufw reload >/dev/null 2>&1
+    info "Rollback complete. Network restored to previous state."
+}
+
 ## Gather all values for given a key in a given map file into a global array
 # USAGE: get_env_array <KEY> <FILE> <TARGET_ARRAY_NAME>
 get_env_array() {
@@ -239,6 +284,7 @@ load_env() {
     local subnets_file="${CONFIG_DIR}/subnets.list"
     if [[ ! -f "$subnets_file" ]]; then
         info "Generating default private subnets list..."
+        mkdir -p "$CONFIG_DIR"
         cat <<EOF >"$subnets_file"
 # Local network subnets to bypass the VPN kill-switch
 # These are standard CIDR local ranges.
@@ -298,6 +344,7 @@ parse_endpoint() {
     line="${line// /}"
 
     ENDPOINT_IP="${line%:*}"
+    ENDPOINT_IP="${ENDPOINT_IP//[\[\]]/}"
     ENDPOINT_PORT="${line##*:}"
 
     [[ -n "$ENDPOINT_IP" && -n "$ENDPOINT_PORT" ]] ||

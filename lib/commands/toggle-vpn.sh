@@ -18,24 +18,22 @@ cmd_toggle_on() {
         info "Connection $CONNECTION_NAME already imported, skipping..."
     fi
 
+    trap rollback_on_error EXIT
+
     # Record current state
     capture_pre_vpn_state
 
     info "Applying UFW killswitch"
+    # allow handshake to vpn before denying traffic to allow ufw to resolve IP if given a domain name
+    sudo ufw allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp
+    # set default deny policy
     sudo ufw default deny outgoing
     disable_ipv6 1
-
-    # allow handshake to vpn
-    sudo ufw allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp
-
-    trap 'info "Interrupted. Rolling back firewall..."; sudo ufw default "$PREV_UFW_POLICY" outgoing; disable_ipv6 0; sudo ufw reload' EXIT
 
     info "Bringing connection up"
     if ! nmcli connection up "$CONNECTION_NAME"; then
         die "Failed to bring up VPN connection."
     fi
-
-    trap - EXIT
 
     write_state_file
 
@@ -50,6 +48,8 @@ cmd_toggle_on() {
 
     sudo ufw reload
     info "VPN + killswitch active ($CONNECTION_NAME on $WG_IFACE)"
+
+    trap - EXIT
 }
 
 cmd_toggle_off() {
