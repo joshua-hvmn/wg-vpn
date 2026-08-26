@@ -6,6 +6,7 @@ fi
 
 cmd_toggle_on() {
     acquire_lock exclusive
+    sudo -v || die "Sudo privileges are required."
     check_deps
     load_env
     parse_endpoint
@@ -18,6 +19,7 @@ cmd_toggle_on() {
         info "Importing connection: $CONNECTION_NAME"
         nmcli connection import type wireguard file "$CONFIG_PATH"
         CONNECTION_IMPORTED=1
+        export CONNECTION_IMPORTED
         nmcli connection modify "$CONNECTION_NAME" ipv4.dns-priority -1
         nmcli connection modify "$CONNECTION_NAME" ipv6.dns-priority -1
     else
@@ -54,6 +56,7 @@ cmd_toggle_on() {
 
 cmd_toggle_off() {
     acquire_lock exclusive
+    sudo -v || die "Sudo privileges are required."
     check_deps
     load_env
 

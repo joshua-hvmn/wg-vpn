@@ -80,6 +80,7 @@ rollback_on_error() {
     fi
 
     sudo ufw reload >/dev/null 2>&1
+    rm -f "$STATE_FILE"
     info "Rollback complete. Network restored to previous state."
 }
 
@@ -388,7 +389,7 @@ capture_pre_vpn_state() {
     info "Gathering pre-VPN state data..."
 
     # Get current UFW outgoing policy to restore later
-    PREV_UFW_POLICY=$(sudo ufw status verbose | grep -o '[a-z]* (outgoing)' | awk '{print $1}')
+    PREV_UFW_POLICY=$(LANG=C sudo ufw status verbose | grep -o '[a-z]* (outgoing)' | awk '{print $1}' || true)
     [[ -z "$PREV_UFW_POLICY" ]] && PREV_UFW_POLICY="allow"
 
     PREV_IPV6_STATE=$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo "0")
@@ -400,7 +401,7 @@ write_state_file() {
     info "Gathering active interface data..."
     local tries=0
     while [[ $tries -lt 15 ]]; do
-        WG_IFACE=$(nmcli -g GENERAL.DEVICES connection show "$CONNECTION_NAME" 2>/dev/null | head -n1)
+        WG_IFACE=$(nmcli -g GENERAL.DEVICES connection show "$CONNECTION_NAME" 2>/dev/null | head -n1 || true)
         [[ -n "$WG_IFACE" ]] && break
         sleep 0.3
         ((tries++)) || true
