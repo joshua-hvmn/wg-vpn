@@ -5,6 +5,7 @@ if [[ "$ENTRYPOINT_LOADED" != "true" ]]; then
 fi
 
 cmd_status() {
+    acquire_lock shared
     check_deps
     load_env
     echo "Config dir  : $WG_CONFIG_DIR"

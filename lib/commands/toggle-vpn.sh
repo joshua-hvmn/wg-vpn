@@ -5,23 +5,24 @@ if [[ "$ENTRYPOINT_LOADED" != "true" ]]; then
 fi
 
 cmd_toggle_on() {
+    acquire_lock exclusive
     check_deps
     load_env
     parse_endpoint
+    capture_pre_vpn_state
+    CONNECTION_IMPORTED=0
+
+    trap rollback_on_error EXIT
 
     if ! nmcli connection show "$CONNECTION_NAME" >/dev/null 2>&1; then
         info "Importing connection: $CONNECTION_NAME"
         nmcli connection import type wireguard file "$CONFIG_PATH"
+        CONNECTION_IMPORTED=1
         nmcli connection modify "$CONNECTION_NAME" ipv4.dns-priority -1
         nmcli connection modify "$CONNECTION_NAME" ipv6.dns-priority -1
     else
         info "Connection $CONNECTION_NAME already imported, skipping..."
     fi
-
-    trap rollback_on_error EXIT
-
-    # Record current state
-    capture_pre_vpn_state
 
     info "Applying UFW killswitch"
     # allow handshake to vpn before denying traffic to allow ufw to resolve IP if given a domain name
@@ -43,7 +44,6 @@ cmd_toggle_on() {
     # local/private ranges
     for subnet in "${ALLOWED_SUBNETS[@]}"; do
         sudo ufw allow out to "$subnet"
-        echo "ALLOWED_SUBNET=\"$subnet\"" >>"$STATE_FILE"
     done
 
     sudo ufw reload
@@ -53,6 +53,7 @@ cmd_toggle_on() {
 }
 
 cmd_toggle_off() {
+    acquire_lock exclusive
     check_deps
     load_env
 
@@ -96,6 +97,7 @@ cmd_toggle_off() {
 }
 
 cmd_toggle_switch() {
+    acquire_lock exclusive
     if [[ -f "$STATE_FILE" ]]; then
         info "VPN is currently ON. Turning OFF..."
         cmd_toggle_off

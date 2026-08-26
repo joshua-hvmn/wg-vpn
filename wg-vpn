@@ -9,6 +9,8 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/wg-vpn"
 
 CONFIG_FILE="${CONFIG_DIR}/wg-vpn.conf"
 STATE_FILE="${STATE_DIR}/wg-vpn.state"
+LOCK_FILE="${STATE_DIR}/wg-vpn.lock"
+LOCK_ACQUIRED=0
 
 declare -A ENV_VARS=(
     [WG_CONFIG_DIR]="Wireguard config directory (e.g., /etc/wireguard/)"

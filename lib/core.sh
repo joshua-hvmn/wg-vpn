@@ -13,6 +13,26 @@ info() {
     printf '→ %s\n' "$*"
 }
 
+## Acquire lock on state
+#  USAGE: acquire_lock [shared|exclusive]
+#  - shared: for read-only ops (status), multiple readers but blocked if writer lock
+#  - exclusive: state mutation (VPN up/down, rule changes)
+#  Safe to call more than once in one process
+acquire_lock() {
+    local mode="${1:-exclusive}"
+
+    [[ "$LOCK_ACQUIRED" -eq 1 ]] && return 0
+
+    mkdir -p "$STATE_DIR"
+    exec {LOCK_FD}>"$LOCK_FILE"
+
+    local flag="-x"
+    [[ "$mode" == "shared" ]] && flag="-s"
+
+    flock -w 5 "$flag" "$LOCK_FD" || die "Another instance of wg-vpn is currently running. Please wait."
+    LOCK_ACQUIRED=1
+}
+
 rollback_on_error() {
     info "An error occurred while starting the VPN, or the script was interrupted. Rolling back..."
 
@@ -51,7 +71,12 @@ rollback_on_error() {
 
     # 6. Ensure NM connection is down
     if [[ -n "${CONNECTION_NAME:-}" ]]; then
-        nmcli connection down "$CONNECTION_NAME" >/dev/null 2>&1 || true
+        if [[ "${CONNECTION_IMPORTED:-0}" -eq 1 ]]; then
+            info "Removing newly imported connection: $CONNECTION_NAME"
+            nmcli connection delete "$CONNECTION_NAME" >/dev/null 2>&1 || true
+        else
+            nmcli connection down "$CONNECTION_NAME" >/dev/null 2>&1 || true
+        fi
     fi
 
     sudo ufw reload >/dev/null 2>&1
@@ -374,7 +399,7 @@ capture_pre_vpn_state() {
 write_state_file() {
     info "Gathering active interface data..."
     local tries=0
-    while [[ $tries -lt 5 ]]; do
+    while [[ $tries -lt 15 ]]; do
         WG_IFACE=$(nmcli -g GENERAL.DEVICES connection show "$CONNECTION_NAME" 2>/dev/null | head -n1)
         [[ -n "$WG_IFACE" ]] && break
         sleep 0.3
