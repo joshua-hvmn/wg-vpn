@@ -84,9 +84,10 @@ rollback_on_error() {
     info "Rollback complete. Network restored to previous state."
 }
 
-## Gather all values for given a key in a given map file into a global array
-# USAGE: get_env_array <KEY> <FILE> <TARGET_ARRAY_NAME>
-get_env_array() {
+## Get indexed array from map file
+# USAGE: get_list_from_map_file <KEY> <FILE> <TARGET_ARRAY_NAME>
+# - Gather all values for given a key in a given map file into a global array
+get_list_from_map_file() {
     local key="$1"
     local file="$2"
     local target_name="$3"
@@ -116,6 +117,27 @@ get_env_array() {
         v="${v%"${v##*[![:space:]]}"}"
 
         [[ -n "$v" ]] && _ref+=("$v")
+    done <"$file"
+}
+
+## Get Indexed Array from list file
+#  USAGE: get_list_from_list_file <FILE> <TARGET_ARRAY_NAME>
+#  - Use this function to build a list from a list file
+#  - Clears and overwrites the global array that is targeted
+#  - Strips comments and whitespaces
+get_list_from_list_file() {
+    local file="$1"
+    local target_name="$2"
+    declare -g -a "$target_name"
+    declare -n _ref="$target_name"
+    _ref=()
+
+    [[ -f "$file" ]] || return 1
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}" # Strip comments
+        line="${line// /}" # Strip whitespaces
+        [[ -n "$line" ]] && _ref+=("$line")
     done <"$file"
 }
 
@@ -307,11 +329,10 @@ load_env() {
         declare -g -x "$var_name=$val"
     done
 
-    local subnets_file="${CONFIG_DIR}/subnets.list"
-    if [[ ! -f "$subnets_file" ]]; then
+    if [[ ! -f "$SUBNETS_FILE" ]]; then
         info "Generating default private subnets list..."
         mkdir -p "$CONFIG_DIR"
-        cat <<EOF >"$subnets_file"
+        cat <<EOF >"$SUBNETS_FILE"
 # Local network subnets to bypass the VPN kill-switch
 # These are standard CIDR local ranges.
 # Add or remove allowed IPs below as needed.
@@ -320,13 +341,6 @@ load_env() {
 192.168.0.0/16
 EOF
     fi
-
-    declare -g -a ALLOWED_SUBNETS=()
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line="${line%%#*}" # Strip comments
-        line="${line// /}" # Strip whitespaces
-        [[ -n "$line" ]] && ALLOWED_SUBNETS+=("$line")
-    done <"$subnets_file"
 
     [[ -n "${WG_CONFIG_DIR:-}" ]] || die "WG_CONFIG_DIR not set in $CONFIG_FILE"
     [[ -n "${WG_CONFIG_FILE:-}" ]] || die "WG_CONFIG_FILE not set in $CONFIG_FILE"

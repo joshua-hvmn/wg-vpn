@@ -11,6 +11,7 @@ cmd_toggle_on() {
     load_env
     parse_endpoint
     capture_pre_vpn_state
+    get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS"
     CONNECTION_IMPORTED=0
 
     trap rollback_on_error EXIT
@@ -60,26 +61,47 @@ cmd_toggle_off() {
     check_deps
     load_env
 
+    local state_missing=0
     if [[ ! -f "$STATE_FILE" ]]; then
-        die "State file missing ($STATE_FILE). Cannot safely determine which UFW rules to delete."
+        info "Warning: State file missing ($STATE_FILE)."
+        if yes_no "Attempt a best-effort cleanup based on default wg-vpn values to restore default internet access?"; then
+            state_missing=1
+        else
+            die "Aborted. UFW killswitch rules remain active."
+        fi
+    else
+        load_state_file
     fi
-
-    load_state_file
 
     info "Bringing connection down"
     nmcli connection down "$CONNECTION_NAME" 2>/dev/null || true
 
     info "Restoring UFW defaults"
-    sudo ufw delete allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp 2>/dev/null || true
-    sudo ufw delete allow out on "$WG_IFACE" 2>/dev/null || true
 
+    if [[ "$state_missing" -eq 1 ]]; then
+        parse_endpoint || true
+    fi
+
+    if [[ -n "${ENDPOINT_IP:-}" && -n "${ENDPOINT_PORT:-}" ]]; then
+        sudo ufw delete allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp 2>/dev/null || true
+    fi
+    if [[ -n "${WG_IFACE:-}" ]]; then
+        sudo ufw delete allow out on "$WG_IFACE" 2>/dev/null || true
+    fi
     if [[ -n "${PREV_IPV6_STATE:-}" ]]; then
         disable_ipv6 "$PREV_IPV6_STATE"
     else
         disable_ipv6 0
     fi
 
-    get_env_array "ALLOWED_SUBNET" "$STATE_FILE" "ALLOWED_SUBNETS"
+    if [[ "$state_missing" -eq 0 ]]; then
+        get_list_from_map_file "ALLOWED_SUBNET" "$STATE_FILE" "ALLOWED_SUBNETS"
+    fi
+
+    if [[ "${#ALLOWED_SUBNETS[@]}" -eq 0 && -f "$SUBNETS_FILE" ]]; then
+        info "Falling back to subnets file for cleanup..."
+        get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS"
+    fi
 
     for subnet in "${ALLOWED_SUBNETS[@]}"; do
         sudo ufw delete allow out to "$subnet" 2>/dev/null || true
@@ -88,13 +110,16 @@ cmd_toggle_off() {
     if [[ -n "${PREV_UFW_POLICY:-}" ]]; then
         sudo ufw default "$PREV_UFW_POLICY" outgoing
     else
+        info "No previous UFW policy found. Defaulting to 'allow' outgoing."
         sudo ufw default allow outgoing
     fi
 
     sudo ufw reload
 
-    info "Removing state file"
-    rm -f "$STATE_FILE"
+    if [[ "$state_missing" -eq 0 ]]; then
+        info "Removing state file"
+        rm -f "$STATE_FILE"
+    fi
 
     info "VPN off, UFW killswitch rules deleted."
 }
