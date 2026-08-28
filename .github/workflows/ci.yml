@@ -1,0 +1,85 @@
+name: CI
+on:
+  push:
+    branches: [main, next]
+  pull_request:
+    branches: [main, next]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint and Test (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: ubuntu
+            image: ubuntu:24.04
+          - distro: debian
+            image: debian:bookworm-slim
+          - distro: arch
+            image: archlinux:latest
+    container:
+      image: ${{ matrix.image }}
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          case "${{ matrix.distro }}" in
+          ubuntu|debian)
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              shellcheck shfmt bats git ca-certificates make
+            ;;
+          arch)
+            for i in 1 2 3; do
+              pacman -Sy archlinux-keyring --noconfirm && break || sleep 5
+            done
+            pacman -Syu --noconfirm shellcheck shfmt bats git make
+            ;;
+          esac
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      - name: Test Makefile Installation
+        run: |
+          set -euo pipefail
+          # Install in CI container
+          make install PREFIX=/usr
+
+          # 1. Verify file placement
+          test -x "/usr/bin/wg-vpn"
+          test -d "/usr/lib/wg-vpn"
+          test -f "/usr/lib/wg-vpn/core.sh" 
+          test -f "/usr/lib/wg-vpn/routers.sh" 
+          test -f "/usr/lib/wg-vpn/commands/misc.sh"
+          test -f "/usr/lib/wg-vpn/commands/toggle-vpn.sh" 
+
+          # 2. Verify sed injection patched local LIB_DIR
+          grep -q 'LIB_DIR="/usr/lib/wg-vpn"' "/usr/bin/wg-vpn" || {
+            echo "ERROR: Makefile failed to patch LIB_DIR variable."
+            exit 1
+          }
+
+          # 3. Smoke test the installed binary
+          "/usr/bin/wg-vpn" help | grep -q "Usage:"
+
+          # 4. Verify uninstall cleanup
+          make uninstall PREFIX=/usr
+          test ! -e "/usr/bin/wg-vpn"
+          test ! -e "/usr/lib/wg-vpn"

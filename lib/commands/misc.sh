@@ -33,3 +33,12 @@ Configuration lives in:
   $CONFIG_FILE
 EOF
 }
+
+cmd_init_config_files() {
+    init_config
+    if [[ ! -f "$SUBNETS_FILE" ]]; then
+        load_env
+    fi
+    info "Configuration base files initialized at $CONFIG_DIR"
+    info "You can now edit $CONFIG_FILE and $SUBNETS_FILE before connecting to skip interactive setup."
+}

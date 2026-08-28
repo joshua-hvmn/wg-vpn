@@ -6,7 +6,7 @@ if ((BASH_VERSION[0] < 4 || (BASH_VERSION[0] == 4 && BASH_VERSION[1] < 3))); the
     exit 1
 fi
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib"
 
 # XDG base dir paths
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/wg-vpn"
@@ -32,10 +32,18 @@ DEPENDENCIES=(
 ENTRYPOINT_LOADED="true"
 
 # Source scripts
-. "$SCRIPT_DIR/lib/core.sh"
-. "$SCRIPT_DIR/lib/routers.sh"
-. "$SCRIPT_DIR/lib/commands/misc.sh"
-. "$SCRIPT_DIR/lib/commands/toggle-vpn.sh"
+
+# shellcheck source=lib/core.sh
+. "$LIB_DIR/core.sh"
+
+# shellcheck source=lib/routers.sh
+. "$LIB_DIR/routers.sh"
+
+# shellcheck source=lib/commands/misc.sh
+. "$LIB_DIR/commands/misc.sh"
+
+# shellcheck source=lib/commands/toggle-vpn.sh
+. "$LIB_DIR/commands/toggle-vpn.sh"
 
 # Main
 first_arg="${1:-}"
