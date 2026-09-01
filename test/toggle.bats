@@ -12,7 +12,6 @@ teardown() {
 	cat >"$MOCK_BIN_DIR/nmcli" <<'EOF'
 #!/usr/bin/env bash
 echo "nmcli $*" >> "$MOCK_LOG"
-# 1. Always succed and output wg0 for iface checks
 if [[ "$*" == *"GENERAL.DEVICES"* ]]
 	echo "wg0"
 	exit 0
@@ -20,11 +19,7 @@ fi
 
 # 2. Fail connection check only if not imported
 if [[ "$1" == "connection" && "$2" == "show" ]]; then
-	if grep -q "connection import" "$MOCK_LOG"; then
-		exit 0
-	else
-		exit 1
-	fi
+	grep -q "connection import" "$MOCK_LOG" && exit 0 || exit 1
 fi
 
 exit 0
@@ -96,11 +91,7 @@ fi
 
 # 2. Fail connection check only if not imported
 if [[ "$1" == "connection" && "$2" == "show" ]]; then
-	if grep -q "connection import" "$MOCK_LOG"; then
-		exit 0
-	else
-		exit 1
-	fi
+	grep -q "connection import" "$MOCK_LOG" && exit 0 || exit 1
 fi
 
 exit 0
