@@ -19,8 +19,10 @@ if [[ "$*" == *"GENERAL.DEVICES"* ]]
 fi
 
 # 2. Fail connection check only if not imported
-if [[ "$*" == *"connection show"* ]]; then
-	if ! grep -q "connection import" "$MOCK_LOG"; then
+if [[ "$1" == "connection" && "$2" == "show" ]]; then
+	if grep -q "connection import" "$MOCK_LOG"; then
+		exit 0
+	else
 		exit 1
 	fi
 fi
@@ -30,6 +32,12 @@ EOF
 	chmod +x "$MOCK_BIN_DIR/nmcli"
 
 	run ./wg-vpn up
+	if [ "$status" -ne 0 ]; then
+		echo "--- wg-vpn up failed with status $status ---" >&3
+		echo "Output: $output" >&3
+		echo "Mock log:" >&3
+		cat "$MOCK_LOG" >&3
+	fi
 	[ "$status" -eq 0 ]
 
 	assert_log "nmcli connection import type wireguard"
@@ -55,6 +63,12 @@ ALLOWED_SUBNET="192.168.1.0/24"
 EOF
 
 	run ./wg-vpn down
+	if [ "$status" -ne 0 ]; then
+		echo "--- wg-vpn down failed with status $status ---" >&3
+		echo "Output: $output" >&3
+		echo "Mock log:" >&3
+		cat "$MOCK_LOG" >&3
+	fi
 	[ "$status" -eq 0 ]
 
 	assert_log "nmcli connection down test-vpn"
@@ -76,12 +90,15 @@ if [[ "$*" == *"GENERAL.DEVICES"* ]]
 	exit 0
 fi
 
-# 2. Force connection to fail to trigger rollback
-if [[ "$*" == *"connection up"* ]]; then
+if [[ "$1" == "connection" && "$2" == "up" ]]; then
 	exit 1
 fi
-if [[ "$*" == *"connection show"* ]]; then
-	if ! grep -q "connection import" "$MOCK_LOG"; then
+
+# 2. Fail connection check only if not imported
+if [[ "$1" == "connection" && "$2" == "show" ]]; then
+	if grep -q "connection import" "$MOCK_LOG"; then
+		exit 0
+	else
 		exit 1
 	fi
 fi
@@ -92,6 +109,12 @@ EOF
 	chmod +x "$MOCK_BIN_DIR/nmcli"
 
 	run ./wg-vpn up
+	if [ "$status" -ne 1 ]; then
+		echo "--- wg-vpn up expected status 1 but got $status ---" >&3
+		echo "Output: $output" >&3
+		echo "Mock log:" >&3
+		cat "$MOCK_LOG" >&3
+	fi
 	[ "$status" -eq 1 ]
 
 	assert_log "nmcli connection delete test-vpn"
