@@ -93,8 +93,8 @@ get_list_from_map_file() {
     local target_name="$3"
 
     declare -g -a "$target_name"
-    declare -n _ref="$target_name"
-    _ref=()
+    local -n _map_target_ref="$target_name"
+    _map_target_ref=()
 
     [[ -f "$file" ]] || return 1
 
@@ -116,7 +116,7 @@ get_list_from_map_file() {
         v="${v#"${v%%[![:space:]]*}"}"
         v="${v%"${v##*[![:space:]]}"}"
 
-        [[ -n "$v" ]] && _ref+=("$v")
+        [[ -n "$v" ]] && _map_target_ref+=("$v")
     done <"$file"
 }
 
@@ -128,16 +128,18 @@ get_list_from_map_file() {
 get_list_from_list_file() {
     local file="$1"
     local target_name="$2"
+
     declare -g -a "$target_name"
-    declare -n _ref="$target_name"
-    _ref=()
+    local -n _list_target_ref="$target_name"
+    _list_target_ref=()
 
     [[ -f "$file" ]] || return 1
 
+    local line
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}" # Strip comments
         line="${line// /}" # Strip whitespaces
-        [[ -n "$line" ]] && _ref+=("$line")
+        [[ -n "$line" ]] && _list_target_ref+=("$line")
     done <"$file"
 }
 
@@ -210,7 +212,7 @@ make_temp() {
         # Bash fallback
         tmp_file="$dir/.$base.$$.$RANDOM"
         set -C
-        >"$tmp_file" 2>/dev/null || {
+        : >"$tmp_file" 2>/dev/null || {
             umask "$umask_old"
             return 1
         }
@@ -446,6 +448,6 @@ EOF
 }
 
 disable_ipv6() {
-    sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$1 >/dev/null
-    sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$1 >/dev/null
+    sudo sysctl -w net.ipv6.conf.all.disable_ipv6="$1" >/dev/null
+    sudo sysctl -w net.ipv6.conf.default.disable_ipv6="$1" >/dev/null
 }
