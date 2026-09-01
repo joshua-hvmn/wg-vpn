@@ -12,7 +12,7 @@ teardown() {
 	cat >"$MOCK_BIN_DIR/nmcli" <<'EOF'
 #!/usr/bin/env bash
 echo "nmcli $*" >> "$MOCK_LOG"
-if [[ "$*" == *"GENERAL.DEVICES"* ]]
+if [[ "$*" == *"GENERAL.DEVICES"* ]]; then
 	echo "wg0"
 	exit 0
 fi
@@ -80,7 +80,7 @@ EOF
 #!/usr/bin/env bash
 echo "nmcli $*" >> "$MOCK_LOG"
 # 1. Always succed and output wg0 for iface checks
-if [[ "$*" == *"GENERAL.DEVICES"* ]]
+if [[ "$*" == *"GENERAL.DEVICES"* ]]; then
 	echo "wg0"
 	exit 0
 fi
