@@ -19,12 +19,13 @@ jobs:
   release:
     name: Publish Release
     runs-on: ubuntu-latest
+    environment: release
     if: >
       startsWith(github.ref, 'refs/tags/') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 4.4.0
         with:
           fetch-depth: 0
 
@@ -67,19 +68,32 @@ jobs:
           echo "=== Package contents ==="
           tar -tzf "${PKG_NAME}.tar.gz"
 
+      - name: Sign Release Artifacts
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --detach-sign --armor --output "wg-vpn-${VERSION}.tar.gz.sig" "wg-vpn-${VERSION}.tar.gz"
+
+          gpg --verify "wg-vpn-${VERSION}.tar.gz.sig" "$wg-vpn-${VERSION}.tar.gz"
+
       - name: Attest Build Provenance
-        uses: actions/attest@v4
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # 4.2.2
         with:
           subject-path: "wg-vpn-*.tar.gz"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # 3.0.3
         with:
           tag_name: ${{ env.VERSION }}
           name: ${{ env.VERSION }}
           files: |
             wg-vpn-${{ env.VERSION }}.tar.gz
             wg-vpn-${{ env.VERSION }}.tar.gz.sha256
+            wg-vpn-${{ env.VERSION }}.tar.gz.sig
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(env.VERSION, '-') }}

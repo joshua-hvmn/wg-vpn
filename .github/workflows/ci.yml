@@ -43,9 +43,9 @@ jobs:
               shellcheck shfmt bats git ca-certificates make
             ;;
           arch)
-            for i in 1 2 3; do
-              pacman -Sy archlinux-keyring --noconfirm && break || sleep 5
-            done
+            pacman-key --init
+            pacman-key --populate archlinux
+            pacman -Sy --noconfirm archlinux-keyring
             pacman -Syu --noconfirm shellcheck shfmt bats git make
             ;;
           esac

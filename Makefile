@@ -24,7 +24,7 @@ install:
 	find "$(DESTDIR)$(applibdir)" -type f -name '*.sh' -exec chmod 644 {} +
 
 	# Install main executable to bin dir
-	sed -E 's|^[[:space:]]*LIB_DIR=.*|LIB_DIR="$(applibdir)"|' wg-vpn > wg-vpn.tmp
+	sed -E 's%^[[:space:]]*LIB_DIR=.*%LIB_DIR="$(applibdir)"%' wg-vpn > wg-vpn.tmp
 	install -m 755 wg-vpn.tmp "$(DESTDIR)$(bindir)/wg-vpn"
 	rm -f wg-vpn.tmp
 
@@ -33,7 +33,7 @@ install:
 uninstall:
 	@echo "Uninstalling wg-vpn..."
 	rm -f "$(DESTDIR)$(bindir)/wg-vpn"
-	rm -rf "$(DESTDIR)$(applibdir)"
+	[ -n "$(applibdir)" ] && rm -rf "$(DESTDIR)$(applibdir)"
 	@echo "Uninstallation complete."
 
 lint:
