@@ -46,6 +46,7 @@ jobs:
 
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        shell: bash
 
       # Add more files to the release package in the copy section below
       - name: Package
@@ -67,6 +68,7 @@ jobs:
 
           echo "=== Package contents ==="
           tar -tzf "${PKG_NAME}.tar.gz"
+        shell: bash
 
       - name: Sign Release Artifacts
         env:
@@ -79,6 +81,7 @@ jobs:
             --detach-sign --armor --output "wg-vpn-${VERSION}.tar.gz.sig" "wg-vpn-${VERSION}.tar.gz"
 
           gpg --verify "wg-vpn-${VERSION}.tar.gz.sig" "$wg-vpn-${VERSION}.tar.gz"
+        shell: bash
 
       - name: Attest Build Provenance
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # 4.2.2

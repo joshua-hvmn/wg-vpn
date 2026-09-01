@@ -37,8 +37,8 @@ uninstall:
 	@echo "Uninstallation complete."
 
 lint:
-	shellcheck wg-vpn
-	find lib -name '*.sh' -print0 | xargs -0 shellcheck
+	shellcheck -x --source-path=SCRIPTDIR wg-vpn
+	find lib -name '*.sh' -print0 | xargs -0 shellcheck -x --source-path=SCRIPTDIR
 	shfmt -l -d -i 4 -ci wg-vpn lib/
 
 test:

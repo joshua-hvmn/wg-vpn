@@ -49,6 +49,7 @@ jobs:
             pacman -Syu --noconfirm shellcheck shfmt bats git make
             ;;
           esac
+        shell: bash
 
       - name: Lint
         run: make lint
@@ -83,3 +84,4 @@ jobs:
           make uninstall PREFIX=/usr
           test ! -e "/usr/bin/wg-vpn"
           test ! -e "/usr/lib/wg-vpn"
+        shell: bash
