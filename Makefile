@@ -39,7 +39,7 @@ uninstall:
 lint:
 	shellcheck -x -s bash --source-path=SCRIPTDIR wg-vpn
 	find lib -name '*.sh' -print0 | xargs -0 shellcheck -x -s bash --source-path=SCRIPTDIR
-	shfmt -l -d -i 4 -ci wg-vpn lib/
+	shfmt -l -d -i 4 wg-vpn lib/
 
 test:
 	bats --tap test/
