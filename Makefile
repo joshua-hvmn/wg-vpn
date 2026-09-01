@@ -10,7 +10,7 @@ applibdir = $(libdir)/wg-vpn
 all:
 	@echo "wg-vpn is a shell script and does not need to be compiled."
 	@echo " make install"
-	@echo " make check #lint +plus tests like CI"
+	@echo " make check - lints and tests like CI"
 	@echo " make uninstall"
 
 install:

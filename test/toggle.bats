@@ -4,10 +4,23 @@ setup() {
 }
 
 teardown() {
-	rm -rf "$BATS_TEST_TMPDIR"
+	:
 }
 
 @test "wg-vpn up applies ufw killswitch and starts nmcli" {
+	# Override nmcli mock
+	cat >"$MOCK_BIN_DIR/nmcli" <<'EOF'
+#!/usr/bin/env bash
+echo "nmcli $*" >> "$MOCK_LOG"
+if [[ "$*" == *"connection show"* ]]; then
+	exit 1
+fi
+if [[ "$*" == *"GENERAL.DEVICES"* ]]
+	echo "wg0"
+fi
+EOF
+	chmod +x "$MOCK_BIN_DIR/nmcli"
+
 	run ./wg-vpn up
 	[ "$status" -eq 0 ]
 
@@ -45,10 +58,13 @@ EOF
 }
 
 @test "wg-vpn triggers rollback if nmcli up fails" {
-	cat >"$MOCK_BIN_DIR/nmcli" <<EOF
+	cat >"$MOCK_BIN_DIR/nmcli" <<'EOF'
 #!/usr/bin/env bash
-echo "nmcli \$*" >> "$MOCK_LOG"
-if [[ "\$*" == *"connection up"* ]]; then
+echo "nmcli $*" >> "$MOCK_LOG"
+if [[ "$*" == *"connection show"* ]]; then
+    exit 1
+fi
+if [[ "$*" == *"connection up"* ]]; then
     exit 1
 fi
 if [[ "$*" == *"GENERAL.DEVICES"* ]]; then
