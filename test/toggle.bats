@@ -8,6 +8,7 @@ teardown() {
 }
 
 @test "wg-vpn up applies ufw killswitch and starts nmcli" {
+	: >"$MOCK_LOG"
 	# Override nmcli mock
 	cat >"$MOCK_BIN_DIR/nmcli" <<'EOF'
 #!/usr/bin/env bash
@@ -46,6 +47,7 @@ EOF
 }
 
 @test "wg-vpn down restores previous network state" {
+	: >"$MOCK_LOG"
 	mkdir -p "$XDG_STATE_HOME/wg-vpn"
 	cat >"$XDG_STATE_HOME/wg-vpn/wg-vpn.state" <<EOF
 ENDPOINT_IP="198.51.100.1"
@@ -75,6 +77,7 @@ EOF
 }
 
 @test "wg-vpn triggers rollback if nmcli up fails" {
+	: >"$MOCK_LOG"
 	# Override nmcli mock to force up to fail
 	cat >"$MOCK_BIN_DIR/nmcli" <<'EOF'
 #!/usr/bin/env bash

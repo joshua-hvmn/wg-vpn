@@ -80,13 +80,16 @@ jobs:
           echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
             --detach-sign --armor --output "wg-vpn-${VERSION}.tar.gz.sig" "wg-vpn-${VERSION}.tar.gz"
 
-          gpg --verify "wg-vpn-${VERSION}.tar.gz.sig" "$wg-vpn-${VERSION}.tar.gz"
+          gpg --verify "wg-vpn-${VERSION}.tar.gz.sig" "$wg-vpn-${VERSION}.tar.gz" || {
+            echo "ERROR: GPG Signature verification failed!"
+            exit 1
+          }
         shell: bash
 
       - name: Attest Build Provenance
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # 4.2.2
         with:
-          subject-path: "wg-vpn-*.tar.gz"
+          subject-path: "wg-vpn-${{ env.VERSION }}.tar.gz"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # 3.0.3
