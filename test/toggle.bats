@@ -18,6 +18,7 @@ fi
 if [[ "$*" == *"GENERAL.DEVICES"* ]]
 	echo "wg0"
 fi
+exit 0
 EOF
 	chmod +x "$MOCK_BIN_DIR/nmcli"
 
