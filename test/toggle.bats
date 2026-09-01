@@ -12,12 +12,19 @@ teardown() {
 	cat >"$MOCK_BIN_DIR/nmcli" <<'EOF'
 #!/usr/bin/env bash
 echo "nmcli $*" >> "$MOCK_LOG"
-if [[ "$*" == *"connection show"* ]]; then
-	exit 1
-fi
+# 1. Always succed and output wg0 for iface checks
 if [[ "$*" == *"GENERAL.DEVICES"* ]]
 	echo "wg0"
+	exit 0
 fi
+
+# 2. Fail connection check only if not imported
+if [[ "$*" == *"connection show"* ]]; then
+	if ! grep -q "connection import" "$MOCK_LOG"; then
+		exit 1
+	fi
+fi
+
 exit 0
 EOF
 	chmod +x "$MOCK_BIN_DIR/nmcli"
@@ -59,18 +66,27 @@ EOF
 }
 
 @test "wg-vpn triggers rollback if nmcli up fails" {
+	# Override nmcli mock to force up to fail
 	cat >"$MOCK_BIN_DIR/nmcli" <<'EOF'
 #!/usr/bin/env bash
 echo "nmcli $*" >> "$MOCK_LOG"
-if [[ "$*" == *"connection show"* ]]; then
-    exit 1
+# 1. Always succed and output wg0 for iface checks
+if [[ "$*" == *"GENERAL.DEVICES"* ]]
+	echo "wg0"
+	exit 0
 fi
+
+# 2. Force connection to fail to trigger rollback
 if [[ "$*" == *"connection up"* ]]; then
-    exit 1
+	exit 1
 fi
-if [[ "$*" == *"GENERAL.DEVICES"* ]]; then
-    echo "wg0"
+if [[ "$*" == *"connection show"* ]]; then
+	if ! grep -q "connection import" "$MOCK_LOG"; then
+		exit 1
+	fi
 fi
+
+exit 0
 EOF
 
 	chmod +x "$MOCK_BIN_DIR/nmcli"
