@@ -23,9 +23,41 @@ A robust, Bash-based WireGuard client manager with automatic UFW kill-switch sup
 
 ## Installation
 
-**WIP**
-
 ### From Source:
+
+Download the latest release tarball, signature, and checksum file from the [Releases page](https://github.com/joshua-hvmn/wg-vpn/releases).
+
+**1. Download the artifacts** (Replace `v0.1.1` with target version):
+```bash
+VERSION="v0.1.1"
+curl -sLO "[https://github.com/joshua-hvmn/wg-vpn/releases/download/$](https://github.com/joshua-hvmn/wg-vpn/releases/download/$){VERSION}/wg-vpn-${VERSION}.tar.gz"
+curl -sLO "[https://github.com/joshua-hvmn/wg-vpn/releases/download/$](https://github.com/joshua-hvmn/wg-vpn/releases/download/$){VERSION}/wg-vpn-${VERSION}.tar.gz.sha256"
+curl -sLO "[https://github.com/joshua-hvmn/wg-vpn/releases/download/$](https://github.com/joshua-hvmn/wg-vpn/releases/download/$){VERSION}/wg-vpn-${VERSION}.tar.gz.sig"
+```
+
+**2. Verify checksum and signature**:
+```bash
+# Verify SHA256 checksum
+sha256sum -c "wg-vpn-${VERSION}.tar.gz.sha256"
+
+# Verify GPG signature (requires importing the maintainer's public key first)
+gpg --verify "wg-vpn-${VERSION}.tar.gz.sig" "wg-vpn-${VERSION}.tar.gz"
+```
+
+**3. Extract and install**:
+```bash
+tar -xzf "wg-vpn-${VERSION}.tar.gz"
+cd "wg-vpn-${VERSION}"
+make install
+```
+
+## Uninstallation
+
+To remove the script and library files, run the following from the extracted source directory (stop wg-vpn first):
+```bash
+make uninstall
+```
+*(Note: This leaves your config file in `~/.config/wg-vpn` intact.)*
 
 ## Usage
 ### Initialization
