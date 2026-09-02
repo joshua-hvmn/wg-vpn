@@ -4,6 +4,8 @@ if [[ "$ENTRYPOINT_LOADED" != "true" ]]; then
     exit 1
 fi
 
+# TODO: Split core up
+
 # Helpers
 die() {
     printf 'error: %s\n' "$*" >&2
@@ -293,6 +295,8 @@ init_config() {
 
     [[ "$needs_setup" -eq 0 ]] && return 0
 
+    mkdir -p "$CONFIG_DIR" || die "Could not create config directory: $CONFIG_DIR"
+
     if yes_no "Would you like to configure wg-vpn now?"; then
         mkdir -p "${CONFIG_FILE%/*}"
 
@@ -316,9 +320,32 @@ init_config() {
         done
         info "Configuration saved to $CONFIG_FILE"
     else
-        die "Setup aborted. wg-vpn cannot proceed without required variables."
+        # Create skeleton config
+        if [[ ! -f "$CONFIG_FILE:-" ]]; then
+            cat >"$CONFIG_FILE" <<EOF
+# wg-vpn configuration
+# fill in the values below, and run wg-vpn on
+
+WG_CONFIG_DIR=
+WG_CONFIG_FILE=
+EOF
+            info "Created empty config at $CONFIG_FILE"
+            info "Edit it manually, then run 'wg-vpn', or run 'wg-vpn' again to be prompted again."
+        fi
     fi
 
+    # Ensure subnets file exists
+    if [[ ! -f "$SUBNETS_FILE" ]]; then
+        info "Generating default private subnets list..."
+        cat >"$SUBNETS_FILE" <<EOF
+# Local network subnets to bypass the VPN kill-switch
+# These are standard CIDR local ranges.
+# Add or remove allowed IPs below as needed.
+10.0.0.0/8
+172.16.0.0/12
+192.168.0.0/16
+EOF
+    fi
 }
 
 load_env() {
