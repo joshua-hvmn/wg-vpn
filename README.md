@@ -30,9 +30,9 @@ Download the latest release tarball, signature, and checksum file from the [Rele
 **1. Download the artifacts** (Replace `v0.1.1` with target version):
 ```bash
 VERSION="v0.1.1"
-curl -sLO "[https://github.com/joshua-hvmn/wg-vpn/releases/download/$](https://github.com/joshua-hvmn/wg-vpn/releases/download/$){VERSION}/wg-vpn-${VERSION}.tar.gz"
-curl -sLO "[https://github.com/joshua-hvmn/wg-vpn/releases/download/$](https://github.com/joshua-hvmn/wg-vpn/releases/download/$){VERSION}/wg-vpn-${VERSION}.tar.gz.sha256"
-curl -sLO "[https://github.com/joshua-hvmn/wg-vpn/releases/download/$](https://github.com/joshua-hvmn/wg-vpn/releases/download/$){VERSION}/wg-vpn-${VERSION}.tar.gz.sig"
+curl -sLO "https://github.com/joshua-hvmn/wg-vpn/releases/download/${VERSION}/wg-vpn-${VERSION}.tar.gz"
+curl -sLO "https://github.com/joshua-hvmn/wg-vpn/releases/download/${VERSION}/wg-vpn-${VERSION}.tar.gz.sig"
+curl -sLO "https://github.com/joshua-hvmn/wg-vpn/releases/download/${VERSION}/wg-vpn-${VERSION}.tar.gz.sha256"
 ```
 
 **2. Verify checksum and signature**:
