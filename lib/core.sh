@@ -321,7 +321,7 @@ init_config() {
         info "Configuration saved to $CONFIG_FILE"
     else
         # Create skeleton config
-        if [[ ! -f "$CONFIG_FILE:-" ]]; then
+        if [[ ! -f "${CONFIG_FILE:-}" ]]; then
             cat >"$CONFIG_FILE" <<EOF
 # wg-vpn configuration
 # fill in the values below, and run wg-vpn on
