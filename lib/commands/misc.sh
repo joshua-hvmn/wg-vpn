@@ -5,6 +5,7 @@ if [[ "$ENTRYPOINT_LOADED" != "true" ]]; then
 fi
 
 cmd_status() {
+    acquire_lock shared
     check_deps
     load_env
     echo "Config dir  : $WG_CONFIG_DIR"
@@ -29,6 +30,12 @@ Commands:
   status, ps    Show current state
 
 Configuration lives in:
-  $ENV_FILE
+  $CONFIG_FILE
 EOF
+}
+
+cmd_init_config_files() {
+    init_config
+    info "Configuration base files initialized at $CONFIG_DIR"
+    info "You can now edit $CONFIG_FILE and $SUBNETS_FILE before connecting to skip interactive setup."
 }

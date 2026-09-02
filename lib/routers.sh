@@ -20,6 +20,9 @@ process_command() {
     -h | --help | help | usage)
         usage
         ;;
+    init | --init-config)
+        cmd_init_config_files
+        ;;
     *)
         die "unknown command: $1"
         ;;
