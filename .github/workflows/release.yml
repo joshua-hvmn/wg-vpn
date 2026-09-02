@@ -80,7 +80,7 @@ jobs:
           echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
             --detach-sign --armor --output "wg-vpn-${VERSION}.tar.gz.sig" "wg-vpn-${VERSION}.tar.gz"
 
-          gpg --verify "wg-vpn-${VERSION}.tar.gz.sig" "$wg-vpn-${VERSION}.tar.gz" || {
+          gpg --verify "wg-vpn-${VERSION}.tar.gz.sig" "wg-vpn-${VERSION}.tar.gz" || {
             echo "ERROR: GPG Signature verification failed!"
             exit 1
           }

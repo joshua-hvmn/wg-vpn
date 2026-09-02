@@ -65,14 +65,14 @@ jobs:
 
           # 1. Verify file placement
           test -x "/usr/bin/wg-vpn"
-          test -d "/usr/lib/wg-vpn"
-          test -f "/usr/lib/wg-vpn/core.sh" 
-          test -f "/usr/lib/wg-vpn/routers.sh" 
-          test -f "/usr/lib/wg-vpn/commands/misc.sh"
-          test -f "/usr/lib/wg-vpn/commands/toggle-vpn.sh" 
+          test -d "/usr/share/wg-vpn"
+          test -f "/usr/share/wg-vpn/core.sh" 
+          test -f "/usr/share/wg-vpn/routers.sh" 
+          test -f "/usr/share/wg-vpn/commands/misc.sh"
+          test -f "/usr/share/wg-vpn/commands/toggle-vpn.sh" 
 
           # 2. Verify sed injection patched local LIB_DIR
-          grep -q 'LIB_DIR="/usr/lib/wg-vpn"' "/usr/bin/wg-vpn" || {
+          grep -q "/usr/share/wg-vpn" "/usr/bin/wg-vpn" || {
             echo "ERROR: Makefile failed to patch LIB_DIR variable."
             exit 1
           }
@@ -83,5 +83,5 @@ jobs:
           # 4. Verify uninstall cleanup
           make uninstall PREFIX=/usr
           test ! -e "/usr/bin/wg-vpn"
-          test ! -e "/usr/lib/wg-vpn"
+          test ! -e "/usr/share/wg-vpn"
         shell: bash
