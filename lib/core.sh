@@ -429,7 +429,7 @@ capture_pre_vpn_state() {
     export PREV_UFW_POLICY
 }
 
-write_state_file() {
+write_initial_state() {
     mkdir -p "${STATE_FILE%/*}"
     local tmp
     tmp=$(make_temp "$STATE_FILE") || die "cannot create temp state file"
@@ -439,7 +439,6 @@ write_state_file() {
 ENDPOINT_IP="$ENDPOINT_IP"
 ENDPOINT_PORT="$ENDPOINT_PORT"
 CONNECTION_NAME="$CONNECTION_NAME"
-WG_IFACE="$WG_IFACE"
 PREV_UFW_POLICY="$PREV_UFW_POLICY"
 EOF
         for subnet in "${ALLOWED_SUBNETS[@]}"; do
@@ -466,15 +465,19 @@ update_state_interface() {
 }
 
 check_ufw_ipv6() {
-    if grep -q -i "^IPV6=no" /etc/default/ufw || ! grep -q -i "^IPV6=yes" /etc/default/ufw; then
+    local ufw_config="/etc/default/ufw"
+
+    [[ -f "$ufw_config" ]] || return 0 # Skip for test environments
+
+    if grep -q -i "^IPV6=no" "$ufw_config" || ! grep -q -i "^IPV6=yes" "$ufw_config"; then
         info "Security Warning: UFW is not configured to manage IPv6."
         info "This is required to prevent data leaks when the VPN killswitch is active."
 
         if yes_no "Would you like wg-vpn to automatically enable UFW IPv6 support now?"; then
-            sudo sed -i 's/^IPV6=no/IPV6=yes/i' /etc/default/ufw || true
+            sudo sed -i 's/^IPV6=no/IPV6=yes/i' "$ufw_config" || true
 
-            if ! grep -q -i "^IPV6=yes" /etc/default/ufw; then
-                echo "IPV6=yes" | sudo tee -a /etc/default/ufw >/dev/null
+            if ! grep -q -i "^IPV6=yes" "$ufw_config"; then
+                echo "IPV6=yes" | sudo tee -a "$ufw_config" >/dev/null
             fi
 
             sudo ufw reload >/dev/null 2>&1
