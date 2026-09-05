@@ -62,16 +62,7 @@ rollback_on_error() {
         done
     fi
 
-    # 5. Restore IPv6 state
-    if command -v disable_ipv6 >/dev/null 2>&1; then
-        if [[ -n "${PREV_IPV6_STATE:-}" ]]; then
-            disable_ipv6 "$PREV_IPV6_STATE"
-        else
-            disable_ipv6 0
-        fi
-    fi
-
-    # 6. Ensure NM connection is down
+    # 5. Ensure NM connection is down
     if [[ -n "${CONNECTION_NAME:-}" ]]; then
         if [[ "${CONNECTION_IMPORTED:-0}" -eq 1 ]]; then
             info "Removing newly imported connection: $CONNECTION_NAME"
@@ -435,9 +426,7 @@ capture_pre_vpn_state() {
     PREV_UFW_POLICY=$(LANG=C sudo ufw status verbose | grep -o '[a-z]* (outgoing)' | awk '{print $1}' || true)
     [[ -z "$PREV_UFW_POLICY" ]] && PREV_UFW_POLICY="allow"
 
-    PREV_IPV6_STATE=$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo "0")
-
-    export PREV_UFW_POLICY PREV_IPV6_STATE
+    export PREV_UFW_POLICY
 }
 
 write_state_file() {
@@ -463,7 +452,6 @@ ENDPOINT_PORT="$ENDPOINT_PORT"
 CONNECTION_NAME="$CONNECTION_NAME"
 WG_IFACE="$WG_IFACE"
 PREV_UFW_POLICY="$PREV_UFW_POLICY"
-PREV_IPV6_STATE="$PREV_IPV6_STATE"
 EOF
         for subnet in "${ALLOWED_SUBNETS[@]}"; do
             printf 'ALLOWED_SUBNET="%s"\n' "$subnet"
@@ -474,7 +462,22 @@ EOF
     export WG_IFACE
 }
 
-disable_ipv6() {
-    sudo sysctl -w net.ipv6.conf.all.disable_ipv6="$1" >/dev/null
-    sudo sysctl -w net.ipv6.conf.default.disable_ipv6="$1" >/dev/null
+check_ufw_ipv6() {
+    if grep -q -i "^IPV6=no" /etc/default/ufw || ! grep -q -i "^IPV6=yes" /etc/default/ufw; then
+        info "Security Warning: UFW is not configured to manage IPv6."
+        info "This is required to prevent data leaks when the VPN killswitch is active."
+
+        if yes_no "Would you like wg-vpn to automatically enable UFW IPv6 support now?"; then
+            sudo sed -i 's/^IPV6=no/IPV6=yes/i' /etc/default/ufw || true
+
+            if ! grep -q -i "^IPV6=yes" etc/default/ufw; then
+                echo "IPV6=yes" | sudo tee -a /etc/default/ufw >/dev/null
+            fi
+
+            sudo ufw reload >/dev/null 2>&1
+            info "UFW IPv6 support enabled"
+        else
+            die "Cannot proceed safely without IPv6 support. Aborting."
+        fi
+    fi
 }

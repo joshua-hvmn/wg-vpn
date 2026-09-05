@@ -55,7 +55,6 @@ ENDPOINT_PORT="51820"
 CONNECTION_NAME="test-vpn"
 WG_IFACE="wg0"
 PREV_UFW_POLICY="allow"
-PREV_IPV6_STATE=0
 ALLOWED_SUBNET="192.168.1.0/24"
 EOF
 
@@ -71,8 +70,6 @@ EOF
 	assert_log "nmcli connection down test-vpn"
 	assert_log "sudo ufw delete allow out to 198.51.100.1 port 51820 proto udp"
 	assert_log "sudo ufw delete allow out to 192.168.1.0/24"
-	assert_log "sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0"
-	assert_log "sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0"
 	assert_log "sudo ufw default allow outgoing"
 }
 
