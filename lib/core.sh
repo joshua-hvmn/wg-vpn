@@ -430,17 +430,6 @@ capture_pre_vpn_state() {
 }
 
 write_state_file() {
-    info "Gathering active interface data..."
-    local tries=0
-    while [[ $tries -lt 15 ]]; do
-        WG_IFACE=$(nmcli -g GENERAL.DEVICES connection show "$CONNECTION_NAME" 2>/dev/null | head -n1 || true)
-        [[ -n "$WG_IFACE" ]] && break
-        sleep 0.3
-        ((tries++)) || true
-    done
-    [[ -n "$WG_IFACE" ]] || die "could not determine interface for $CONNECTION_NAME"
-
-    # Save state
     mkdir -p "${STATE_FILE%/*}"
     local tmp
     tmp=$(make_temp "$STATE_FILE") || die "cannot create temp state file"
@@ -459,6 +448,20 @@ EOF
     } >"$tmp"
     chmod 600 "$tmp"
     mv -f -- "$tmp" "$STATE_FILE"
+}
+
+update_state_interface() {
+    info "Gathering active interface data..."
+    local tries=0
+    while [[ $tries -lt 15 ]]; do
+        WG_IFACE=$(nmcli -g GENERAL.DEVICES connection show "$CONNECTION_NAME" 2>/dev/null | head -n1 || true)
+        [[ -n "$WG_IFACE" ]] && break
+        sleep 0.3
+        ((tries++)) || true
+    done
+    [[ -n "$WG_IFACE" ]] || die "could not determine interface for $CONNECTION_NAME"
+
+    echo "WG_IFACE=\"$WG_IFACE\"" >>"$STATE_FILE"
     export WG_IFACE
 }
 
@@ -470,7 +473,7 @@ check_ufw_ipv6() {
         if yes_no "Would you like wg-vpn to automatically enable UFW IPv6 support now?"; then
             sudo sed -i 's/^IPV6=no/IPV6=yes/i' /etc/default/ufw || true
 
-            if ! grep -q -i "^IPV6=yes" etc/default/ufw; then
+            if ! grep -q -i "^IPV6=yes" /etc/default/ufw; then
                 echo "IPV6=yes" | sudo tee -a /etc/default/ufw >/dev/null
             fi
 

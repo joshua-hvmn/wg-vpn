@@ -22,11 +22,16 @@ cmd_toggle_on() {
         nmcli connection import type wireguard file "$CONFIG_PATH"
         CONNECTION_IMPORTED=1
         export CONNECTION_IMPORTED
+
         nmcli connection modify "$CONNECTION_NAME" ipv4.dns-priority -1
         nmcli connection modify "$CONNECTION_NAME" ipv6.dns-priority -1
+        nmcli connection modify "$CONNECTION_NAME" ipv4.dns-search "~."
+        nmcli connection modify "$CONNECTION_NAME" ipv6.dns-search "~."
     else
         info "Connection $CONNECTION_NAME already imported, skipping..."
     fi
+
+    write_initial_state
 
     info "Applying UFW killswitch"
     # allow handshake to vpn before denying traffic to allow ufw to resolve IP if given a domain name
@@ -38,7 +43,7 @@ cmd_toggle_on() {
         die "Failed to bring up VPN connection."
     fi
 
-    write_state_file
+    update_state_interface
 
     sudo ufw allow out on "$WG_IFACE"
 
