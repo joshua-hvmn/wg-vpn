@@ -8,6 +8,7 @@ cmd_toggle_on() {
     acquire_lock exclusive
     sudo -v || die "Sudo privileges are required."
     check_deps
+    check_ufw_ipv6
     load_env
     parse_endpoint
     capture_pre_vpn_state
@@ -30,9 +31,7 @@ cmd_toggle_on() {
     info "Applying UFW killswitch"
     # allow handshake to vpn before denying traffic to allow ufw to resolve IP if given a domain name
     sudo ufw allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp
-    # set default deny policy
     sudo ufw default deny outgoing
-    disable_ipv6 1
 
     info "Bringing connection up"
     if ! nmcli connection up "$CONNECTION_NAME"; then
@@ -41,10 +40,8 @@ cmd_toggle_on() {
 
     write_state_file
 
-    # allow all traffic out on the vpn
     sudo ufw allow out on "$WG_IFACE"
 
-    # local/private ranges
     for subnet in "${ALLOWED_SUBNETS[@]}"; do
         sudo ufw allow out to "$subnet"
     done
@@ -85,13 +82,9 @@ cmd_toggle_off() {
     if [[ -n "${ENDPOINT_IP:-}" && -n "${ENDPOINT_PORT:-}" ]]; then
         sudo ufw delete allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp 2>/dev/null || true
     fi
+
     if [[ -n "${WG_IFACE:-}" ]]; then
         sudo ufw delete allow out on "$WG_IFACE" 2>/dev/null || true
-    fi
-    if [[ -n "${PREV_IPV6_STATE:-}" ]]; then
-        disable_ipv6 "$PREV_IPV6_STATE"
-    else
-        disable_ipv6 0
     fi
 
     if [[ "$state_missing" -eq 0 ]]; then
