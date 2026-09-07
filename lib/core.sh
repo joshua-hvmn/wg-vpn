@@ -64,12 +64,8 @@ rollback_on_error() {
 
     # 5. Ensure NM connection is down
     if [[ -n "${CONNECTION_NAME:-}" ]]; then
-        if [[ "${CONNECTION_IMPORTED:-0}" -eq 1 ]]; then
-            info "Removing newly imported connection: $CONNECTION_NAME"
-            nmcli connection delete "$CONNECTION_NAME" >/dev/null 2>&1 || true
-        else
-            nmcli connection down "$CONNECTION_NAME" >/dev/null 2>&1 || true
-        fi
+        info "Removing connection profile: $CONNECTION_NAME"
+        nmcli connection delete "$CONNECTION_NAME" >/dev/null 2>&1 || true
     fi
 
     sudo ufw reload >/dev/null 2>&1

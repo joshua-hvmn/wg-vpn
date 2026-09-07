@@ -4,63 +4,7 @@ if [[ "$ENTRYPOINT_LOADED" != "true" ]]; then
     exit 1
 fi
 
-cmd_toggle_on() {
-    acquire_lock exclusive
-    sudo -v || die "Sudo privileges are required."
-    check_deps
-    check_ufw_ipv6
-    load_env
-    parse_endpoint
-    capture_pre_vpn_state
-    get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS"
-    CONNECTION_IMPORTED=0
-
-    trap rollback_on_error EXIT
-
-    if ! nmcli connection show "$CONNECTION_NAME" >/dev/null 2>&1; then
-        info "Importing connection: $CONNECTION_NAME"
-        nmcli connection import type wireguard file "$CONFIG_PATH"
-        CONNECTION_IMPORTED=1
-        export CONNECTION_IMPORTED
-
-        nmcli connection modify "$CONNECTION_NAME" ipv4.dns-priority -1
-        nmcli connection modify "$CONNECTION_NAME" ipv6.dns-priority -1
-        nmcli connection modify "$CONNECTION_NAME" ipv4.dns-search "~."
-        nmcli connection modify "$CONNECTION_NAME" ipv6.dns-search "~."
-    else
-        info "Connection $CONNECTION_NAME already imported, skipping..."
-    fi
-
-    write_initial_state
-
-    info "Applying UFW killswitch"
-    # allow handshake to vpn before denying traffic to allow ufw to resolve IP if given a domain name
-    sudo ufw allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp
-    sudo ufw default deny outgoing
-
-    info "Bringing connection up"
-    if ! nmcli connection up "$CONNECTION_NAME"; then
-        die "Failed to bring up VPN connection."
-    fi
-
-    update_state_interface
-
-    sudo ufw allow out on "$WG_IFACE"
-
-    for subnet in "${ALLOWED_SUBNETS[@]}"; do
-        sudo ufw allow out to "$subnet"
-    done
-
-    sudo ufw reload
-    info "VPN + killswitch active ($CONNECTION_NAME on $WG_IFACE)"
-
-    trap - EXIT
-}
-
-cmd_toggle_off() {
-    acquire_lock exclusive
-    sudo -v || die "Sudo privileges are required."
-    check_deps
+vpn_teardown() {
     load_env
 
     local state_missing=0
@@ -76,7 +20,7 @@ cmd_toggle_off() {
     fi
 
     info "Bringing connection down"
-    nmcli connection down "$CONNECTION_NAME" 2>/dev/null || true
+    nmcli connection delete "$CONNECTION_NAME" 2>/dev/null || true
 
     info "Restoring UFW defaults"
 
@@ -120,6 +64,74 @@ cmd_toggle_off() {
     fi
 
     info "VPN off, UFW killswitch rules deleted."
+}
+
+cmd_toggle_off() {
+    acquire_lock exclusive
+    sudo -v || die "Sudo privileges are required."
+    check_deps
+    vpn_teardown
+}
+
+cmd_toggle_on() {
+    acquire_lock exclusive
+    sudo -v || die "Sudo privileges are required."
+    check_deps
+    check_ufw_ipv6
+
+    if [[ -f "$STATE_FILE" ]]; then
+        if yes_no "wg-vpn already active. Would you like to refresh the config and UFW rules?"; then
+            vpn_teardown
+        else
+            info "Aborted."
+            return 0
+        fi
+    fi
+
+    load_env
+    parse_endpoint
+    capture_pre_vpn_state
+    get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS"
+
+    trap rollback_on_error EXIT
+
+    if ! nmcli connection show "$CONNECTION_NAME" >/dev/null 2>&1; then
+        info "Importing connection: $CONNECTION_NAME"
+        nmcli connection import type wireguard file "$CONFIG_PATH"
+
+        nmcli connection modify "$CONNECTION_NAME" ipv4.dns-priority -1
+        nmcli connection modify "$CONNECTION_NAME" ipv6.dns-priority -1
+        nmcli connection modify "$CONNECTION_NAME" ipv4.dns-search "~."
+        nmcli connection modify "$CONNECTION_NAME" ipv6.dns-search "~."
+        nmcli connection modify "$CONNECTION_NAME" connection.description "wg-vpn-managed"
+    else
+        info "Connection $CONNECTION_NAME already imported, skipping..."
+    fi
+
+    write_initial_state
+
+    info "Applying UFW killswitch"
+    # allow handshake to vpn before denying traffic to allow ufw to resolve IP if given a domain name
+    sudo ufw allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp
+    sudo ufw default deny outgoing
+
+    info "Bringing connection up"
+    if ! nmcli connection up "$CONNECTION_NAME"; then
+        die "Failed to bring up VPN connection."
+    fi
+
+    update_state_interface
+
+    sudo ufw allow out on "$WG_IFACE"
+
+    for subnet in "${ALLOWED_SUBNETS[@]}"; do
+        sudo ufw allow out to "$subnet"
+    done
+
+    sudo ufw reload
+    info "VPN + killswitch active ($CONNECTION_NAME on $WG_IFACE)"
+
+    trap - EXIT
 }
 
 cmd_toggle_switch() {
