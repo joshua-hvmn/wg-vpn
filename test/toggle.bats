@@ -67,7 +67,7 @@ EOF
 	fi
 	[ "$status" -eq 0 ]
 
-	assert_log "nmcli connection down test-vpn"
+	assert_log "nmcli connection delete test-vpn"
 	assert_log "sudo ufw delete allow out to 198.51.100.1 port 51820 proto udp"
 	assert_log "sudo ufw delete allow out to 192.168.1.0/24"
 	assert_log "sudo ufw default allow outgoing"
