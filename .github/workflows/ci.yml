@@ -31,7 +31,7 @@ jobs:
       image: ${{ matrix.image }}
       options: --user root
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install tools
         run: |
@@ -43,10 +43,7 @@ jobs:
               shellcheck shfmt bats git ca-certificates make
             ;;
           arch)
-            pacman-key --init
-            pacman-key --populate archlinux
-            pacman -Sy --noconfirm archlinux-keyring
-            pacman -Syu --noconfirm shellcheck shfmt bats git make
+            pacman -Sy --noconfirm --needed shellcheck shfmt bats git make
             ;;
           esac
         shell: bash
@@ -61,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           # Install in CI container
-          make install PREFIX=/usr
+          make install prefix=/usr
 
           # 1. Verify file placement
           test -x "/usr/bin/wg-vpn"
@@ -78,10 +75,13 @@ jobs:
           }
 
           # 3. Smoke test the installed binary
-          "/usr/bin/wg-vpn" help | grep -q "Usage:"
+          "/usr/bin/wg-vpn" help | grep -q "Usage:" || {
+            echo ERROR: `wg-vpn help` smoke test failed.
+            exit 1
+          }
 
           # 4. Verify uninstall cleanup
-          make uninstall PREFIX=/usr
+          make uninstall prefix=/usr
           test ! -e "/usr/bin/wg-vpn"
           test ! -e "/usr/share/wg-vpn"
         shell: bash

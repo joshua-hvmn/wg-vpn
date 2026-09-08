@@ -1,95 +1,129 @@
-# Standard prefixes and fallbacks
-XDG_DATA_HOME   ?= $(HOME)/.local/share
-XDG_CONFIG_HOME ?= $(HOME)/.config
-XDG_STATE_HOME  ?= $(HOME)/.local/state
+# ==================================================================================
+# wg-vpn Makefile
+# packager friendly, MIT license
+# Run `make help` for usage
+# ==================================================================================
 
-LOCAL_PREFIX	:= $(HOME)/.local
-DEFAULT_PREFIX  := /usr/local
+# Safety rules
+.POSIX:
+.DELETE_ON_ERROR:
 
-# Dynamic prefix selection 
-ifeq ($(DESTDIR),)
-	WRITABLE := $(shell test -w $(DEFAULT_PREFIX) 2>/dev/null && echo "yes" || (test -w $$(dirname $(DEFAULT_PREFIX)) 2>/dev/null && echo "yes") || echo "no")
-	ifeq ($(WRITABLE),no)
-		# User / non-root install -> XDG (immutable FHS directories)
-		PREFIX		?= $(LOCAL_PREFIX)
-		datadir		?= $(XDG_DATA_HOME)
-		sysconfdir  ?= $(XDG_CONFIG_HOME)/wg-vpn
-	else
-		# System Install (able to edit system directories)
-		PREFIX		?= $(DEFAULT_PREFIX)
-		datadir		?= $(PREFIX)/share
-		sysconfdir  ?= /etc/wg-vpn
-	endif
+# System tools
+SHELL			:= /bin/sh
+.SHELLFLAGS		:= -ec
+INSTALL			?= install
+INSTALL_PROGRAM ?= $(INSTALL) -m 755
+INSTALL_DATA	?= $(INSTALL) -m 644
+INSTALL_DIR     ?= $(INSTALL) -d -m 755
+FIND			?= find
+SED				?= sed
+RM				?= rm -f
+SHFMT			?= shfmt
+SHELLCHECK		?= shellcheck
+BATS			?= bats
+
+# Standard directory variables
+DESTDIR			?=
+prefix		    ?= /usr/local
+exec_prefix     ?= $(prefix)
+bindir		    ?= $(exec_prefix)/bin
+datarootdir     ?= $(prefix)/share
+datadir			?= $(datarootdir)
+
+# App specific dirs
+applibdir	    := $(datadir)/wg-vpn
+
+# Files
+TARGET			:= wg-vpn
+TMP_TARGET		:= $(TARGET).tmp
+
+# Verbosity
+V				?= 0
+ifeq ($(V), 1)
+	Q :=
 else
-	# Upstream packaging environment context
-	PREFIX		?= /usr
-	datadir		?= $(PREFIX)/share
-	sysconfdir  ?= /etc/wg-vpn
+	Q := @
 endif
 
-bindir		 = $(PREFIX)/bin
-applibdir	 = $(datadir)/wg-vpn
+.PHONY: all help build install uninstall check lint test check clean
 
-.PHONY: all install uninstall check test lint clean
+all: build ## Build the script (default target)
 
-all:
-	@echo "wg-vpn is a shell script and does not need to be compiled."
-	@echo " make install"
-	@echo " make check - lints and tests like CI"
-	@echo " make uninstall"
+help: ## Show this help message
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ { printf " %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST) | sort
 	@echo ""
 	@echo "Current Configuration:"
-	@echo " PREFIX      = $(PREFIX)"
+	@echo " prefix      = $(prefix)"
 	@echo " DESTDIR     = $(DESTDIR)"
-	@echo " sysconfdir  = $(sysconfdir)"
+	@echo " bindir      = $(bindir)"
 	@echo " applibdir   = $(applibdir)"
+	@echo ""
+	@echo "Override with e.g. 'make install prefix=/usr' or 'make V=1 install'."
 
-install:
-	@echo "Installing wg-vpn to $(DESTDIR)$(PREFIX)..."
-	install -d "$(DESTDIR)$(bindir)"
-	install -d "$(DESTDIR)$(applibdir)"
+build: $(TMP_TARGET) ## Inject install paths into a local copy of the script
 
-	# Install lib files to lib dir
-	if [ -d lib ]; then \
-		cp -RPp lib/. "$(DESTDIR)$(applibdir)"; \
-		find "$(DESTDIR)$(applibdir)" -type d -exec chmod 755 {} +; \
-		find "$(DESTDIR)$(applibdir)" -type f -name '*.sh' -exec chmod 644 {} +; \
+$(TMP_TARGET): $(TARGET)
+	@printf ' %-8s %s\n' "SED" "$(TARGET) -> $(TMP_TARGET)"
+	$(Q)$(SED) -e "s|@LIBDIR@|$(applibdir)|g" $(TARGET) > $(TMP_TARGET)
+	$(Q)chmod +x $(TMP_TARGET)
+
+install: build ## Install the script and libraries (respects DESTDIR, prefix)
+	@printf ' %-8s %s\n' "DIR" "$(DESTDIR)$(bindir)"
+	$(Q)$(INSTALL_DIR) "$(DESTDIR)$(bindir)"
+	@printf ' %-8s %s\n' "INSTALL" "$(DESTDIR)$(bindir)/$(TARGET)"
+	$(Q)$(INSTALL_PROGRAM) $(TMP_TARGET) "$(DESTDIR)$(bindir)/$(TARGET)"
+	@if [ -d lib ]; then \
+		printf ' %-8s %s\n' "INSTALL" "$(DESTDIR)$(applibdir)/ (preserving layout)"; \
+		$(FIND) lib -type f -name '*.sh' -exec sh -c ' \
+			for file; do \
+				rel="$${file#lib/}"; \
+				dest="$(DESTDIR)$(applibdir)/$$rel"; \
+				$(INSTALL_DIR) "$$(dirname "$$dest")"; \
+				$(INSTALL_DATA) "$$file" "$$dest"; \
+			done \
+		' sh {} +; \
 	fi
 
-	# Inject path constraints for LIB_DIR into installed entrypoint
-	sed -e 's%@LIBDIR@%$(applibdir)%g' wg-vpn > wg-vpn.tmp
-
-	# Install main executable to bin dir
-	install -m 755 wg-vpn.tmp "$(DESTDIR)$(bindir)/wg-vpn"
-	rm -f wg-vpn.tmp
-
-	@echo "Note: Config will be created on first run in $(sysconfdir)"
+	@echo "Note: Config will be created on first run in ~/.config/wg-vpn"
 	@echo "		 (or run 'wg-vpn init' to initialize an empty config)"
 	@echo "Installation complete."
 
-uninstall:
-	@echo "Uninstalling wg-vpn..."
-	rm -f "$(DESTDIR)$(bindir)/wg-vpn"
-	[ -n "$(applibdir)" ] && [ "$(applibdir)" != "/" ] && rm -rf "$(DESTDIR)$(applibdir)"
+uninstall: ## Remove installed system files
+	@printf ' %-8s %s\n' "RM" "$(DESTDIR)$(bindir)/$(TARGET)"
+	$(Q)$(RM) "$(DESTDIR)$(bindir)/$(TARGET)"
+	@if [ -d "$(DESTDIR)$(applibdir)" ]; then \
+		printf ' %-8s %s\n' "RM" "$(DESTDIR)$(applibdir)"; \
+		rm -rf "$(DESTDIR)$(applibdir)"; \
+	fi
 	@echo "Note: Configuration and state files left untouched."
 	@echo "To fully remove wg-vpn data:"
 	@echo "  rm -rf ~/.config/wg-vpn ~/.local/state/wg-vpn"
 	@echo "Uninstallation complete."
 
-lint:
-	shellcheck -x -s bash --source-path=SCRIPTDIR wg-vpn
-	if [ -d lib ]; then \
-		find lib -name '*.sh' -print0 | xargs -0 shellcheck -x -s bash --source-path=SCRIPTDIR; \
-		shfmt -l -d -i 4 wg-vpn lib/; \
+lint: ## Run shellcheck and shfmt over the script and libraries
+	@command -v $(SHELLCHECK) >/dev/null 2>&1 || { echo "error: shellcheck not found in PATH." >&2; exit 1; }
+	@command -v $(SHFMT) >/dev/null 2>&1 || { echo "error: shfmt not found in PATH." >&2; exit 1; }
+	@printf ' %-8s %s\n' "LINT" " Running shellcheck..."
+	$(Q)$(SHELLCHECK) -x -s bash --source-path=SCRIPTDIR $(TARGET)
+	@if [ -d lib ]; then \
+		$(FIND) lib -type f -name '*.sh' -exec sh -c ' \
+			for file; do \
+				$(SHELLCHECK) -x -s bash --source-path=SCRIPTDIR "$$file" || exit 1; \
+			done \
+		' sh {} +; \
+		printf ' %-8s %s\n' "FMT" " Running shellcheck..."; \
+		$(FIND) $(TARGET) lib -type f \( -name '*.sh' -o -name '$(TARGET)' \) -exec $(SHFMT) -l -d -i 4 {} +; \
 	else \
-		shfmt -l -d -i 4 wg-vpn; \
+		$(SHFMT) -l -d -i 4 $(TARGET); \
 	fi
 
-test:
-	bats --tap test/
+test: ## Run the bats test suite
+	@command -v $(BATS) >/dev/null 2>&1 || { echo 'error: bats not found in path.' >&2; exit 1; }
+	@printf ' %-8s %s\n' "TEST" "Running BATS..."
+	$(Q)$(BATS) --tap test/
 
-check: lint test
+check: lint test ## Run lint and test together
 
-clean:
-	rm -f wg-vpn.tmp
-	# rm -rf /tmp/test-install-*
+clean: ## Remove build artifacts
+	@printf ' %-8s %s\n' "RM" "$(TMP_TARGET)"
+	$(Q)$(RM) $(TMP_TARGET)
