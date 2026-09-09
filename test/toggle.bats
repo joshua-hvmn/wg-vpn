@@ -43,6 +43,7 @@ EOF
 	assert_log "sudo ufw allow out to 172.16.0.0/12"
 	assert_log "sudo ufw allow out to 192.168.0.0/16"
 	assert_log "nmcli connection up test-vpn"
+	assert_log_order "sudo ufw default deny outgoing" "nmcli connection up test-vpn"
 	assert_log "sudo ufw allow out on wg0"
 }
 

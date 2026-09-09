@@ -76,7 +76,7 @@ jobs:
 
           # 3. Smoke test the installed binary
           "/usr/bin/wg-vpn" help | grep -q "Usage:" || {
-            echo ERROR: `wg-vpn help` smoke test failed.
+            echo ERROR: 'wg-vpn help' smoke test failed.
             exit 1
           }
 

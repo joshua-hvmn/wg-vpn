@@ -111,7 +111,7 @@ lint: ## Run shellcheck and shfmt over the script and libraries
 				$(SHELLCHECK) -x -s bash --source-path=SCRIPTDIR "$$file" || exit 1; \
 			done \
 		' sh {} +; \
-		printf ' %-8s %s\n' "FMT" " Running shellcheck..."; \
+		printf ' %-8s %s\n' "FMT" " Running shfmt..."; \
 		$(FIND) $(TARGET) lib -type f \( -name '*.sh' -o -name '$(TARGET)' \) -exec $(SHFMT) -l -d -i 4 {} +; \
 	else \
 		$(SHFMT) -l -d -i 4 $(TARGET); \

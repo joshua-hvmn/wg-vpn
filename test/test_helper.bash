@@ -65,3 +65,11 @@ assert_not_log() {
         return 1
     fi
 }
+
+assert_log_order() {
+    local first="$1" second="$2"
+    local l1 l2
+    l1=$(grep -nF -- "$first" "$MOCK_LOG" | head -1 | cut -d: -f1) # could return specific errors
+    l2=$(grep -nF -- "$second" "$MOCK_LOG" | head -1 | cut -d: -f1)
+    [ -n "$l1" ] && [ -n "$l2" ] && [ "$l1" -lt "$l2" ]
+}

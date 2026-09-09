@@ -58,7 +58,7 @@ jobs:
           mkdir -p "$PKG_DIR"
           cp wg-vpn "$PKG_DIR/"
           cp -a lib "$PKG_DIR/"
-          cp README.md LICENSE Makefile "$PKG_DIR/" 2>/dev/null || true
+          cp README.md LICENSE Makefile "$PKG_DIR/"
 
           # Embed version into a file
           printf '%s\n' "$VERSION" > "$PKG_DIR/VERSION"
