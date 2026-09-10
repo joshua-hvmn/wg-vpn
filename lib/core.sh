@@ -11,6 +11,9 @@ die() {
     printf 'error: %s\n' "$*" >&2
     exit 1
 }
+error() {
+    printf 'error: %s\n' "$*" >&2
+}
 info() {
     printf '→ %s\n' "$*"
 }
@@ -36,7 +39,7 @@ acquire_lock() {
 }
 
 rollback_on_error() {
-    info "An error occurred while starting the VPN, or the script was interrupted. Rolling back..."
+    error "VPN startup failed, or the script was otherwise interrupted. Rolling back..."
 
     # 1. Restore UFW default outgoing policy
     if [[ -n "${PREV_UFW_POLICY:-}" ]]; then
@@ -262,69 +265,11 @@ edit_kv() {
     }
 }
 
-init_config() {
-    local is_first_run=0
-    local needs_setup=0
-
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        is_first_run=1
-        needs_setup=1
-        info "First run detected / Config Missing."
-        info "Initializing configuration."
-    else
-        for key in "${!ENV_VARS[@]}"; do
-            if [[ -z "$(get_env_var "$key" "$CONFIG_FILE")" ]]; then
-                needs_setup=1
-                info "Configuration exists but is missing required variable: $key"
-            fi
-        done
-    fi
-
-    [[ "$needs_setup" -eq 0 ]] && return 0
-
-    mkdir -p "$CONFIG_DIR" || die "Could not create config directory: $CONFIG_DIR"
-
-    if yes_no "Would you like to configure wg-vpn now?"; then
-        mkdir -p "${CONFIG_FILE%/*}"
-
-        for key in "${!ENV_VARS[@]}"; do
-            local desc="${ENV_VARS[$key]}"
-            local current_val=""
-
-            [[ "$is_first_run" -eq 0 ]] && current_val=$(get_env_var "$key" "$CONFIG_FILE")
-
-            local prompt_suffix=""
-            [[ -n "$current_val" ]] && prompt_suffix=" [$current_val]"
-
-            local user_val
-            read -r -p "Enter $desc${prompt_suffix}: " user_val
-
-            user_val="${user_val:-$current_val}"
-
-            if [[ -n "$user_val" ]]; then
-                edit_kv "$key" "$user_val" "$CONFIG_FILE"
-            fi
-        done
-        info "Configuration saved to $CONFIG_FILE"
-    else
-        # Create skeleton config
-        if [[ ! -f "${CONFIG_FILE:-}" ]]; then
-            cat >"$CONFIG_FILE" <<EOF
-# wg-vpn configuration
-# fill in the values below, and run wg-vpn on
-
-WG_CONFIG_DIR=
-WG_CONFIG_FILE=
-EOF
-            info "Created empty config at $CONFIG_FILE"
-            info "Edit it manually, then run 'wg-vpn', or run 'wg-vpn' again to be prompted again."
-        fi
-    fi
-
-    # Ensure subnets file exists
-    if [[ ! -f "$SUBNETS_FILE" ]]; then
-        info "Generating default private subnets list..."
-        cat >"$SUBNETS_FILE" <<EOF
+ensure_subnets_file() {
+    [[ -f "$SUBNETS_FILE" ]] && return 0
+    info "Generating default private subnets list..."
+    mkdir -p "$CONFIG_DIR"
+    cat >"$SUBNETS_FILE" <<'EOF'
 # Local network subnets to bypass the VPN kill-switch
 # These are standard CIDR local ranges.
 # Add or remove allowed IPs below as needed.
@@ -332,11 +277,11 @@ EOF
 172.16.0.0/12
 192.168.0.0/16
 EOF
-    fi
 }
 
 load_env() {
     init_config
+    ensure_subnets_file
 
     [[ -f "$CONFIG_FILE" ]] || die "missing $CONFIG_FILE"
     for var_name in "${!ENV_VARS[@]}"; do
@@ -344,19 +289,6 @@ load_env() {
         val=$(get_env_var "$var_name" "$CONFIG_FILE")
         declare -g -x "$var_name=$val"
     done
-
-    if [[ ! -f "$SUBNETS_FILE" ]]; then
-        info "Generating default private subnets list..."
-        mkdir -p "$CONFIG_DIR"
-        cat <<EOF >"$SUBNETS_FILE"
-# Local network subnets to bypass the VPN kill-switch
-# These are standard CIDR local ranges.
-# Add or remove allowed IPs below as needed.
-10.0.0.0/8
-172.16.0.0/12
-192.168.0.0/16
-EOF
-    fi
 
     [[ -n "${WG_CONFIG_DIR:-}" ]] || die "WG_CONFIG_DIR not set in $CONFIG_FILE"
     [[ -n "${WG_CONFIG_FILE:-}" ]] || die "WG_CONFIG_FILE not set in $CONFIG_FILE"

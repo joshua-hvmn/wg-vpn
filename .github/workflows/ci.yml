@@ -67,6 +67,7 @@ jobs:
           test -f "/usr/share/wg-vpn/routers.sh" 
           test -f "/usr/share/wg-vpn/commands/misc.sh"
           test -f "/usr/share/wg-vpn/commands/toggle-vpn.sh" 
+          test -f "/usr/share/wg-vpn/commands/config.sh"
 
           # 2. Verify sed injection patched local LIB_DIR
           grep -q "/usr/share/wg-vpn" "/usr/bin/wg-vpn" || {

@@ -4,27 +4,32 @@ if [[ "$ENTRYPOINT_LOADED" != "true" ]]; then
     exit 1
 fi
 process_command() {
-    case "$1" in
+    local cmd="$1"
+    shift || true
+    case "$cmd" in
     on | up)
-        cmd_toggle_on
+        cmd_toggle_on "$@"
         ;;
     off | down)
-        cmd_toggle_off
+        cmd_toggle_off "$@"
         ;;
     "" | toggle)
-        cmd_toggle_switch
+        cmd_toggle_switch "$@"
         ;;
     -st | --status | status | ps)
-        cmd_status
+        cmd_status "$@"
         ;;
     -h | --help | help | usage)
-        usage
+        usage "$@"
         ;;
     init | --init-config)
-        cmd_init_config_files
+        cmd_config init
+        ;;
+    config | --configure)
+        cmd_config "$@"
         ;;
     *)
-        die "unknown command: $1"
+        die "unknown command: $cmd"
         ;;
     esac
 }

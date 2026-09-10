@@ -46,10 +46,13 @@ ENTRYPOINT_LOADED="true"
 # shellcheck source=lib/commands/misc.sh
 . "$LIB_DIR/commands/misc.sh"
 
+# shellcheck source=lib/commands/config.sh
+. "$LIB_DIR/commands/config.sh"
+
 # shellcheck source=lib/commands/toggle-vpn.sh
 . "$LIB_DIR/commands/toggle-vpn.sh"
 
 # Main
 first_arg="${1:-}"
 shift || true
-process_command "$first_arg"
+process_command "$first_arg" "$@"

@@ -28,14 +28,10 @@ Commands:
   off, down     Deactivate WireGuard + restore outgoing traffic
   toggle        Switch between on/off automatically (Default)
   status, ps    Show current state
+  config        Manage WireGuard config path and allowed subnets
+  init          Initialize configuration files
 
 Configuration lives in:
   $CONFIG_FILE
 EOF
-}
-
-cmd_init_config_files() {
-    init_config
-    info "Configuration base files initialized at $CONFIG_DIR"
-    info "You can now edit $CONFIG_FILE and $SUBNETS_FILE before connecting to skip interactive setup."
 }
