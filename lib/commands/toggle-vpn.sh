@@ -5,8 +5,6 @@ if [[ "$ENTRYPOINT_LOADED" != "true" ]]; then
 fi
 
 vpn_teardown() {
-    load_env
-
     local state_missing=0
     if [[ ! -f "$STATE_FILE" ]]; then
         info "Warning: State file missing ($STATE_FILE)."
@@ -19,14 +17,19 @@ vpn_teardown() {
         load_state_file
     fi
 
-    info "Bringing connection down"
-    nmcli connection delete "$CONNECTION_NAME" 2>/dev/null || true
-
-    info "Restoring UFW defaults"
-
     if [[ "$state_missing" -eq 1 ]]; then
+        load_env
         parse_endpoint || true
     fi
+
+    info "Bringing connection down"
+    if is_managed_connection "$CONNECTION_NAME"; then
+        nmcli connection delete "$CONNECTION_NAME" 2>/dev/null || true
+    else
+        info "Connection '$CONNECTION_NAME' was not created by wg-vpn; leaving it in place."
+    fi
+
+    info "Restoring UFW defaults"
 
     if [[ -n "${ENDPOINT_IP:-}" && -n "${ENDPOINT_PORT:-}" ]]; then
         sudo ufw delete allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp 2>/dev/null || true
@@ -77,6 +80,7 @@ cmd_toggle_on() {
     acquire_lock exclusive
     sudo -v || die "Sudo privileges are required."
     check_deps
+    check_ufw_active
     check_ufw_ipv6
 
     if [[ -f "$STATE_FILE" ]]; then
@@ -98,12 +102,12 @@ cmd_toggle_on() {
     if ! nmcli connection show "$CONNECTION_NAME" >/dev/null 2>&1; then
         info "Importing connection: $CONNECTION_NAME"
         nmcli connection import type wireguard file "$CONFIG_PATH"
+        nmcli connection modify "$CONNECTION_NAME" connection.description "wg-vpn-managed"
 
         nmcli connection modify "$CONNECTION_NAME" ipv4.dns-priority -1
         nmcli connection modify "$CONNECTION_NAME" ipv6.dns-priority -1
         nmcli connection modify "$CONNECTION_NAME" ipv4.dns-search "~."
         nmcli connection modify "$CONNECTION_NAME" ipv6.dns-search "~."
-        nmcli connection modify "$CONNECTION_NAME" connection.description "wg-vpn-managed"
     else
         info "Connection $CONNECTION_NAME already imported, skipping..."
     fi

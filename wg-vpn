@@ -21,6 +21,7 @@ SUBNETS_FILE="${CONFIG_DIR}/subnets.list"
 STATE_FILE="${STATE_DIR}/wg-vpn.state"
 LOCK_FILE="${STATE_DIR}/wg-vpn.lock"
 LOCK_ACQUIRED=0
+LOCK_MODE=""
 
 declare -A ENV_VARS=(
     [WG_CONFIG_DIR]="Wireguard config directory (e.g., /etc/wireguard/)"
@@ -30,7 +31,6 @@ DEPENDENCIES=(
     "nmcli"
     "ufw"
     "sudo"
-    "ip"
     "flock"
 )
 ENTRYPOINT_LOADED="true"

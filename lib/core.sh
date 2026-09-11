@@ -26,16 +26,19 @@ info() {
 acquire_lock() {
     local mode="${1:-exclusive}"
 
-    [[ "$LOCK_ACQUIRED" -eq 1 ]] && return 0
-
-    mkdir -p "$STATE_DIR"
-    exec {LOCK_FD}>"$LOCK_FILE"
+    if [[ "$LOCK_ACQUIRED" -eq 1 ]]; then
+        [[ "$LOCK_MODE" == "$mode" ]] && return 0
+    else
+        mkdir -p "$STATE_DIR"
+        exec {LOCK_FD}>"$LOCK_FILE"
+    fi
 
     local flag="-x"
     [[ "$mode" == "shared" ]] && flag="-s"
 
     flock -w 5 "$flag" "$LOCK_FD" || die "Another instance of wg-vpn is currently running. Please wait."
     LOCK_ACQUIRED=1
+    LOCK_MODE="$mode"
 }
 
 rollback_on_error() {
@@ -67,8 +70,12 @@ rollback_on_error() {
 
     # 5. Ensure NM connection is down
     if [[ -n "${CONNECTION_NAME:-}" ]]; then
-        info "Removing connection profile: $CONNECTION_NAME"
-        nmcli connection delete "$CONNECTION_NAME" >/dev/null 2>&1 || true
+        if is_managed_connection "$CONNECTION_NAME"; then
+            info "Removing connection profile: $CONNECTION_NAME"
+            nmcli connection delete "$CONNECTION_NAME" >/dev/null 2>&1 || true
+        else
+            info "Leaving pre-existing connection profile untouched: $CONNECTION_NAME"
+        fi
     fi
 
     sudo ufw reload >/dev/null 2>&1
@@ -175,6 +182,8 @@ get_env_var() {
     file_val=$(sed -n "s/^${key}=//p" "$file" 2>/dev/null | head -1)
     file_val="${file_val%\"}" # Strip trailing quote
     file_val="${file_val#\"}" # Strip leading quote
+    file_val="${file_val%\'}"
+    file_val="${file_val#\'}"
     if [[ -n "$file_val" ]]; then
         printf '%s' "$file_val"
     else
@@ -350,11 +359,29 @@ check_deps() {
 capture_pre_vpn_state() {
     info "Gathering pre-VPN state data..."
 
-    # Get current UFW outgoing policy to restore later
-    PREV_UFW_POLICY=$(LANG=C sudo ufw status verbose | grep -o '[a-z]* (outgoing)' | awk '{print $1}' || true)
-    [[ -z "$PREV_UFW_POLICY" ]] && PREV_UFW_POLICY="allow"
+    local raw
+    raw=$(LANG=C sudo ufw status verbose | grep -o '[a-z]* (outgoing)' | awk '{print $1}' || true)
 
+    case "$raw" in
+    allow | deny | reject)
+        PREV_UFW_POLICY="$raw"
+        ;;
+    *)
+        info "Warning: could not reliably determine the current UFW outgoing policy (got: '${raw:-<empty>}')."
+        info "Defaulting to 'allow' on teardown. If your previous policy was 'deny' or 'reject', re-apply it manually: sudo ufw default <policy> outgoing"
+        PREV_UFW_POLICY="allow"
+        ;;
+    esac
     export PREV_UFW_POLICY
+}
+
+is_managed_connection() {
+    local name="$1"
+    [[ -n "$name" ]] || return 1
+
+    local desc
+    desc=$(nmcli -g connection.description connection show "$name" 2>/dev/null || true)
+    [[ "$desc" == "wg-vpn-managed" ]]
 }
 
 write_initial_state() {
@@ -388,8 +415,33 @@ update_state_interface() {
     done
     [[ -n "$WG_IFACE" ]] || die "could not determine interface for $CONNECTION_NAME"
 
-    echo "WG_IFACE=\"$WG_IFACE\"" >>"$STATE_FILE"
+    local tmp
+    tmp=$(make_temp "$STATE_FILE") || die "cannot create temp state file"
+    cp -- "$STATE_FILE" "$tmp"
+    printf 'WG_IFACE="%s"\n' "$WG_IFACE" >>"$tmp"
+    chmod 600 "$tmp"
+    mv -f -- "$tmp" "$STATE_FILE"
+
     export WG_IFACE
+}
+
+## Ensure UFW is active, not just installed
+check_ufw_active() {
+    local ufw_status
+    ufw_status=$(sudo ufw status 2>/dev/null | head -1)
+
+    if [[ "$ufw_status" != "Status: active" ]]; then
+        info "Security Warning: UFW is installed but not active."
+        info "wg-vpn's kill-switch relies entirely on UFW enforcing its rules;"
+        info "with UFW inactive, no traffic will actually be blocked."
+
+        if yes_no "Would you like wg-vpn to enable UFW now?"; then
+            sudo ufw --force enable >/dev/null 2>&1 || die "Failed to enable UFW."
+            info "UFW enabled."
+        else
+            die "Cannot proceed safely without UFW active. Aborting."
+        fi
+    fi
 }
 
 check_ufw_ipv6() {

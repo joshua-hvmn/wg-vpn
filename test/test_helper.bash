@@ -39,6 +39,16 @@ echo "$cmd \$*" >> "$MOCK_LOG"
 if [[ "$cmd" == "nmcli" && "\$*" == *"GENERAL.DEVICES"* ]]; then
     echo "wg0"
 fi
+# Fake nmcli reporting the connection as wg-vpn-managed so
+# is_managed_connection() allows cleanup in tests.
+if [[ "$cmd" == "nmcli" && "\$*" == *"connection.description"* ]]; then
+    echo "wg-vpn-managed"
+fi
+# Fake ufw reporting itself active so check_ufw_active doesn't trip
+# the interactive "enable UFW?" prompt during tests.
+if [[ "$cmd" == "sudo" && "\$*" == "ufw status" ]]; then
+    echo "Status: active"
+fi
 EOF
         chmod +x "$MOCK_BIN_DIR/$cmd"
     done

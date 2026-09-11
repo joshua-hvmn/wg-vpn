@@ -86,11 +86,17 @@ if [[ "$*" == *"GENERAL.DEVICES"* ]]; then
 	exit 0
 fi
 
+# Report the connection as wg-vpn-managed
+if [[ "$*" == *"connection.description"* ]]; then
+	echo "wg-vpn-managed"
+	exit 0
+fi
+
 if [[ "$1" == "connection" && "$2" == "up" ]]; then
 	exit 1
 fi
 
-# 2. Fail connection check only if not imported
+# Fail connection check only if not imported
 if [[ "$1" == "connection" && "$2" == "show" ]]; then
 	grep -q "connection import" "$MOCK_LOG" && exit 0 || exit 1
 fi
