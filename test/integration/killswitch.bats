@@ -1,19 +1,26 @@
 #!/usr/bin/env bats
 #
-# Runs the actual `wg-vpn` binary as a subprocess - real argument
-# routing, real locking, real config loading, real ufw enforcement.
+# Real kill-switch integration test.
+#
+# Runs the actual `wg-vpn` binary as a subprocess – real argument routing,
+# real locking, real config loading, real ufw enforcement.
 # `nmcli` is the only thing faked (no real WireGuard peer available).
 #
-# Three veth pairs into an isolated netns, each proving exactly one
-# rule type in isolation:
-#   ep pair   (198.51.100.0/24) - the specific endpoint allow rule
-#   tun pair  (192.0.2.0/24)    - the allow-out-on-<iface> rule
-#   sub pair  (203.0.113.0/24)  - the allow-out-to-<subnet> rule
+# Three veth pairs into an isolated netns, each proving exactly one rule
+# type in isolation:
+#   ep pair   (198.51.100.0/24) – the specific endpoint allow rule
+#   tun pair  (192.0.2.0/24)    – the allow-out-on-<iface> rule
+#   sub pair  (203.0.113.0/24)  – the allow-out-to-<subnet> rule
+#
 # subnets.list is set explicitly to 203.0.113.0/24 only, so this test
 # never depends on (or collides with) the default RFC1918 seed list.
 #
+# After `up` the test asserts both the positive paths (allowed traffic)
+# AND the negative paths (everything else must be blocked).  That is the
+# actual leak check.
+#
 # DESTRUCTIVE: resets/disables the real ufw firewall wherever it runs.
-# Always invoke via `make test` - never bats directly on a real host.
+# Always invoke via `make test` – never bats directly on a real host.
 
 KS_NS="wgtest_ks"
 WGVPN_BIN="./wg-vpn"
@@ -57,6 +64,7 @@ setup_file() {
 
 	ip netns exec "$KS_NS" ip link set lo up
 
+	# Background services inside the netns
 	ip netns exec "$KS_NS" python3 "$(pwd)/test/integration/support/udp_echo.py" 198.51.100.2 51820 &
 	echo $! >"$BATS_FILE_TMPDIR/pids"
 	ip netns exec "$KS_NS" python3 -m http.server 8080 --bind 198.51.100.3 >/dev/null 2>&1 &
@@ -81,9 +89,10 @@ teardown_file() {
 		while read -r pid; do kill "$pid" 2>/dev/null || true; done <"$BATS_FILE_TMPDIR/pids"
 	fi
 	ip netns del "$KS_NS" 2>/dev/null || true
-	ip link del wg-ep 2>/dev/null || true
-	ip link del wg-tun 2>/dev/null || true
-	ip link del wg-sub 2>/dev/null || true
+	# Host-side veth names (the far sides disappear with the netns)
+	ip link del wgt-ep 2>/dev/null || true
+	ip link del wgt-tun 2>/dev/null || true
+	ip link del wgt-sub 2>/dev/null || true
 }
 
 setup() {
@@ -106,11 +115,13 @@ PublicKey = dummypublickey=
 Endpoint = 198.51.100.2:51820
 EOF
 
+	# Only the one subnet we want to allow – never the default RFC1918 list
 	echo "203.0.113.0/24" >"$XDG_CONFIG_HOME/wg-vpn/subnets.list"
 
 	MOCK_BIN_DIR="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$MOCK_BIN_DIR"
 
+	# nmcli is fully mocked – we never bring up a real WireGuard interface
 	cat >"$MOCK_BIN_DIR/nmcli" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
@@ -126,11 +137,15 @@ esac
 EOF
 	chmod +x "$MOCK_BIN_DIR/nmcli"
 
+	# sudo mock must handle "sudo -v" (credential refresh) and otherwise
+	# just execute the real command so ufw rules are actually installed.
 	cat >"$MOCK_BIN_DIR/sudo" <<'EOF'
 #!/usr/bin/env bash
+# "sudo -v" is only a credential check – succeed silently
 if [[ "$1" == "-v" ]]; then
-    exit 0
+	exit 0
 fi
+# Everything else runs for real (ufw, etc.)
 exec "$@"
 EOF
 	chmod +x "$MOCK_BIN_DIR/sudo"
@@ -143,28 +158,92 @@ teardown() {
 	ufw --force enable >/dev/null 2>&1 || true
 }
 
-@test "'up' scopes ufw - endpoint, subnet, and tunnel iface" {
-	run bash -c "$WGVPN_BIN up </dev/null"
-	[ "$status" -eq 0 ]
+# ---------------------------------------------------------------------------
+# Helpers – keep the assertions readable
+# ---------------------------------------------------------------------------
 
-	run python3 test/integration/support/udp_probe.py 198.51.100.2 51820
-	[ "$status" -eq 0 ]
-	run python3 test/integration/support/tcp_probe.py 203.0.113.2 8080
-	[ "$status" -eq 0 ]
-	run python3 test/integration/support/tcp_probe.py 192.0.2.2 8080
-	[ "$status" -eq 0 ]
-	run python3 test/integration/support/tcp_probe.py 198.51.100.3 8080
+# Assert that a TCP connect succeeds (status 0)
+assert_tcp_ok() {
+	local host="$1" port="$2"
+	run python3 test/integration/support/tcp_probe.py "$host" "$port"
+	if [[ "$status" -ne 0 ]]; then
+		echo "Expected TCP $host:$port to SUCCEED, but it failed" >&2
+	fi
 	[ "$status" -eq 0 ]
 }
 
-@test "'down' restores default connectivity" {
+# Assert that a TCP connect is blocked (status != 0)
+assert_tcp_blocked() {
+	local host="$1" port="$2"
+	run python3 test/integration/support/tcp_probe.py "$host" "$port"
+	if [[ "$status" -eq 0 ]]; then
+		echo "Expected TCP $host:$port to be BLOCKED, but it succeeded (leak!)" >&2
+	fi
+	[ "$status" -ne 0 ]
+}
+
+# Assert that the UDP endpoint handshake works
+assert_udp_ok() {
+	local host="$1" port="$2"
+	run python3 test/integration/support/udp_probe.py "$host" "$port"
+	if [[ "$status" -ne 0 ]]; then
+		echo "Expected UDP $host:$port to SUCCEED, but it failed" >&2
+	fi
+	[ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+@test "'up' installs kill-switch: allowed paths work, everything else is blocked" {
+	run bash -c "$WGVPN_BIN up </dev/null"
+	if [[ "$status" -ne 0 ]]; then
+		echo "--- wg-vpn up failed ---" >&2
+		echo "$output" >&2
+		ufw status verbose >&2 || true
+	fi
+	[ "$status" -eq 0 ]
+
+	# ----- Positive paths (must succeed) -----
+	# 1. Exact UDP endpoint (handshake)
+	assert_udp_ok 198.51.100.2 51820
+
+	# 2. Explicitly allowed subnet
+	assert_tcp_ok 203.0.113.2 8080
+
+	# 3. Traffic out the WireGuard interface itself
+	assert_tcp_ok 192.0.2.2 8080
+
+	# ----- Negative paths (must be blocked – the actual leak checks) -----
+	# 4. Same L2 network as the endpoint, but TCP instead of the allowed
+	#    UDP port.  This is the purest leak test: the destination is
+	#    reachable at L2, a server is listening, yet ufw must drop it
+	#    because only "allow out to ENDPOINT_IP port ENDPOINT_PORT proto udp"
+	#    was installed.
+	assert_tcp_blocked 198.51.100.3 8080
+
+	# Sanity: default outgoing policy is now deny
+	run bash -c "ufw status verbose | grep -q 'deny (outgoing)'"
+	[ "$status" -eq 0 ]
+}
+
+@test "'down' restores full connectivity and cleans state" {
 	"$WGVPN_BIN" up </dev/null
+	[ -f "$XDG_STATE_HOME/wg-vpn/wg-vpn.state" ]
+
 	run bash -c "$WGVPN_BIN down </dev/null"
 	[ "$status" -eq 0 ]
 
-	run bash -c "! ufw status verbos | grep -q 'deny (outgoing)'"
-	[ "$status" -eq 0 ]
+	# State file must be gone
 	[ ! -f "$XDG_STATE_HOME/wg-vpn/wg-vpn.state" ]
+
+	# Default policy must no longer be deny
+	run bash -c "! ufw status verbose | grep -q 'deny (outgoing)'"
+	[ "$status" -eq 0 ]
+
+	# Previously blocked destinations must work again
+	assert_tcp_ok 198.51.100.3 8080
 }
 
 @test "'down' survives live wg config disappearing" {
@@ -192,6 +271,7 @@ teardown() {
 	run bash -c "$WGVPN_BIN up </dev/null"
 	[ "$status" -ne 0 ]
 
+	# Kill-switch must not be left behind
 	run bash -c "! ufw status verbose | grep -q 'deny (outgoing)'"
 	[ "$status" -eq 0 ]
 	[ ! -f "$XDG_STATE_HOME/wg-vpn/wg-vpn.state" ]
