@@ -229,16 +229,33 @@ assert_udp_ok() {
 }
 
 @test "'down' restores full connectivity and cleans state" {
-	"$WGVPN_BIN" up </dev/null
+	run bash -c "$WGVPN_BIN up </dev/null"
+	if [[ "$status" -ne 0 ]]; then
+		echo "--- up failed (unexpected) ---" >&2
+		echo "$output" >&2
+		ufw status verbose >&2 || true
+	fi
+	[ "$status" -eq 0 ]
 	[ -f "$XDG_STATE_HOME/wg-vpn/wg-vpn.state" ]
 
+	# Show what we captured so we can debug policy restore
+	echo "--- state file after up ---" >&2
+	cat "$XDG_STATE_HOME/wg-vpn/wg-vpn.state" >&2 || true
+
 	run bash -c "$WGVPN_BIN down </dev/null"
+	if [[ "$status" -ne 0 ]]; then
+		echo "--- down failed ---" >&2
+		echo "$output" >&2
+	fi
 	[ "$status" -eq 0 ]
 
 	# State file must be gone
 	[ ! -f "$XDG_STATE_HOME/wg-vpn/wg-vpn.state" ]
 
 	# Default policy must no longer be deny
+	run bash -c "ufw status verbose"
+	echo "--- ufw status after down ---" >&2
+	echo "$output" >&2
 	run bash -c "! ufw status verbose | grep -q 'deny (outgoing)'"
 	[ "$status" -eq 0 ]
 
@@ -269,10 +286,19 @@ assert_udp_ok() {
 	export MOCK_NMCLI_UP_EXIT=1
 
 	run bash -c "$WGVPN_BIN up </dev/null"
+	if [[ "$status" -eq 0 ]]; then
+		echo "--- up unexpectedly succeeded ---" >&2
+		echo "$output" >&2
+	fi
 	[ "$status" -ne 0 ]
 
-	# Kill-switch must not be left behind
+	run bash -c "ufw status verbose"
+	echo "--- ufw status after failed up / rollback ---" >&2
+	echo "$output" >&2
 	run bash -c "! ufw status verbose | grep -q 'deny (outgoing)'"
+	if [[ "$status" -ne 0 ]]; then
+		echo "LEAK: outgoing policy still deny after rollback" >&2
+	fi
 	[ "$status" -eq 0 ]
 	[ ! -f "$XDG_STATE_HOME/wg-vpn/wg-vpn.state" ]
 }
