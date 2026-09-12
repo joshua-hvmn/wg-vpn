@@ -128,6 +128,9 @@ EOF
 
 	cat >"$MOCK_BIN_DIR/sudo" <<'EOF'
 #!/usr/bin/env bash
+if [[ "$1" == "-v" ]]; then
+    exit 0
+fi
 exec "$@"
 EOF
 	chmod +x "$MOCK_BIN_DIR/sudo"
