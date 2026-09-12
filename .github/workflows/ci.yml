@@ -102,4 +102,4 @@ jobs:
       - name: Run Integration Test
         # CI=true is automatically set by GitHub, so the Makefile
         # routes to the raw bats execution.
-        run: sudo make test-integration
+        run: sudo -E make test-integration
