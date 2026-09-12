@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  unit-tests:
     name: Lint and Test (${{ matrix.distro }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -86,3 +86,20 @@ jobs:
           test ! -e "/usr/bin/wg-vpn"
           test ! -e "/usr/share/wg-vpn"
         shell: bash
+
+  integration-test:
+    name: Killswitch Integration Test
+    needs: unit-tests # Waits for fast tests to pass first
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bats ufw iproute2 python3
+
+      - name: Run Integration Test
+        # CI=true is automatically set by GitHub, so the Makefile
+        # routes to the raw bats execution.
+        run: sudo make test-integration

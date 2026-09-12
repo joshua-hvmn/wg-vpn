@@ -45,7 +45,7 @@ else
 	Q := @
 endif
 
-.PHONY: all help build install uninstall check lint test check clean
+.PHONY: all help build install uninstall check lint test test-unit test-integration check clean
 
 all: build ## Build the script (default target)
 
@@ -117,10 +117,19 @@ lint: ## Run shellcheck and shfmt over the script and libraries
 		$(SHFMT) -l -d -i 4 $(TARGET); \
 	fi
 
-test: ## Run the bats test suite
+test-unit: ## Run the mocked bats test suite
 	@command -v $(BATS) >/dev/null 2>&1 || { echo 'error: bats not found in path.' >&2; exit 1; }
-	@printf ' %-8s %s\n' "TEST" "Running BATS..."
+	@printf ' %-8s %s\n' "TEST" "Running unit tests..."
 	$(Q)$(BATS) --tap test/
+test-integration: ## Run the real-script kill-switch test (destructive: root + ufw)
+	@printf ' %-8s %s\n' "TEST" "Running kill-switch integration test..."
+	$(Q)if [ -n "$$CI" ]; then \
+		$(BATS) --tap test/integration/killswitch.bats; \
+	else \
+		./test/integration/run.sh; \
+	fi
+
+test: test-unit test-integration ## Run the full test suite
 
 check: lint test ## Run lint and test together
 
