@@ -121,6 +121,7 @@ test-unit: ## Run the mocked bats test suite
 	@command -v $(BATS) >/dev/null 2>&1 || { echo 'error: bats not found in path.' >&2; exit 1; }
 	@printf ' %-8s %s\n' "TEST" "Running unit tests..."
 	$(Q)$(BATS) --tap test/
+
 test-integration: ## Run the real-script kill-switch test (destructive: root + ufw)
 	@printf ' %-8s %s\n' "TEST" "Running kill-switch integration test..."
 	$(Q)if [ -n "$$CI" ]; then \
