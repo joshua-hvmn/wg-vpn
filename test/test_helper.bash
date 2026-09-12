@@ -1,3 +1,4 @@
+bats_require_minimum_version 1.5.0
 setup_mocks() {
     # Create an isolated environment for config and state
     export XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/config"
