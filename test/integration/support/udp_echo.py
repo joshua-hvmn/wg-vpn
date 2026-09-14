@@ -4,7 +4,8 @@ import socket
 import sys
 
 host, port = sys.argv[1], int(sys.argv[2])
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+family = socket.AF_INET6 if ":" in host else socket.AF_INET
+s = socket.socket(family, socket.SOCK_DGRAM)
 s.bind((host, port))
 while True:
     data, addr = s.recvfrom(1024)

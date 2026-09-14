@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# tcp_probe.py <host> <port> - exot 0 of a real TCP connect succeeds
+# tcp_probe.py <host> <port> - exit 0 if a real TCP connect succeeds
 import socket
 import sys
 
