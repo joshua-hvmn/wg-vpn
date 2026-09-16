@@ -37,6 +37,12 @@ applibdir	    := $(datadir)/wg-vpn
 TARGET			:= wg-vpn
 TMP_TARGET		:= $(TARGET).tmp
 
+# Test Variables
+# Add variables to both to add dirs to the lint test
+test_libdir		?= lib
+test_testdir	?= test
+test_searchdirs := $(strip $(test_libdir) $(test_testdir))
+
 # Verbosity
 V				?= 0
 ifeq ($(V), 1)
@@ -45,7 +51,7 @@ else
 	Q := @
 endif
 
-.PHONY: all help build install uninstall check lint test test-unit test-integration check clean
+.PHONY: all help build install uninstall check lint test test-unit test-integration test-integration-host check clean
 
 all: build ## Build the script (default target)
 
@@ -83,6 +89,9 @@ install: build ## Install the script and libraries (respects DESTDIR, prefix)
 			done \
 		' sh {} +; \
 	fi
+	@if [ -f VERSION ]; then \
+		$(INSTALL_DATA) VERSION "$(DESTDIR)$(applibdir)/VERSION"; \
+	fi
 
 	@echo "Note: Config will be created on first run in ~/.config/wg-vpn"
 	@echo "		 (or run 'wg-vpn init' to initialize an empty config)"
@@ -103,32 +112,40 @@ uninstall: ## Remove installed system files
 lint: ## Run shellcheck and shfmt over the script and libraries
 	@command -v $(SHELLCHECK) >/dev/null 2>&1 || { echo "error: shellcheck not found in PATH." >&2; exit 1; }
 	@command -v $(SHFMT) >/dev/null 2>&1 || { echo "error: shfmt not found in PATH." >&2; exit 1; }
+	@if [ -z "$(test_searchdirs)" ]; then \
+		echo "error: No search directories defined!" >&2; \
+		exit 1; \
+	fi
+	@for dir in $(test_searchdirs); do \
+		[ -d "$$dir" ] || { echo "error: Directory not found!" >&2; exit 1; }; \
+	done
 	@printf ' %-8s %s\n' "LINT" " Running shellcheck..."
 	$(Q)$(SHELLCHECK) -x -s bash --source-path=SCRIPTDIR $(TARGET)
-	@if [ -d lib ]; then \
-		$(FIND) lib -type f -name '*.sh' -exec sh -c ' \
-			for file; do \
-				$(SHELLCHECK) -x -s bash --source-path=SCRIPTDIR "$$file" || exit 1; \
-			done \
-		' sh {} +; \
-		printf ' %-8s %s\n' "FMT" " Running shfmt..."; \
-		$(FIND) $(TARGET) lib -type f \( -name '*.sh' -o -name '$(TARGET)' \) -exec $(SHFMT) -l -d -i 4 {} +; \
-	else \
-		$(SHFMT) -l -d -i 4 $(TARGET); \
-	fi
+	$(Q)$(FIND) $(test_searchdirs) -type f \( -name '*.sh' -o -name '*.bash' \) \
+		-exec $(SHELLCHECK) -x -s bash --source-path=SCRIPTDIR {} +
+	@printf ' %-8s %s\n' "FMT" " Running shfmt..."
+	$(Q)$(SHFMT) -l -d -i 4 $(TARGET)
+	$(Q)$(FIND) $(TARGET) $(test_searchdirs) -type f \( -name '*.sh' -o -name '*.bash' \) \
+		-exec $(SHFMT) -l -d -i 4 {} +
 
 test-unit: ## Run the mocked bats test suite
 	@command -v $(BATS) >/dev/null 2>&1 || { echo 'error: bats not found in path.' >&2; exit 1; }
 	@printf ' %-8s %s\n' "TEST" "Running unit tests..."
 	$(Q)$(BATS) --tap test/
 
-test-integration: ## Run the real-script kill-switch test (destructive: root + ufw)
-	@printf ' %-8s %s\n' "TEST" "Running kill-switch integration test..."
-	$(Q)if [ -n "$$CI" ]; then \
-		$(BATS) --tap test/integration/killswitch.bats; \
-	else \
-		./test/integration/run.sh; \
+test-integration: ## Run the kill-switch test suite in a docker container
+	@printf ' %-8s %s\n' "TEST" "Running kill-switch integration tests..."
+	$(Q)./test/integration/run.sh $(BATS_ARGS)
+
+test-integration-host: ## DESTRUCTIVE: run the kill-switch test suite on this host (CI runners only, use 'sudo -E')
+	@printf ' %-8s %s\n' "TEST" "Running kill-switch integration tests on THIS host..."
+	$(Q)if [ -z "$$CI" ]; then \
+		echo "refusing: this resets this machine's firewall and CI is not set." >&2; \
+		echo "run 'make test-integration' to use the container instead." >&2; \
+		exit 1; \
 	fi
+	$(Q)WPVPN_ALLOW_UFW_RESET=1 $(BATS) --print-output-on-failure \
+		test/integration/killswitch.bats $(BATS_ARGS)
 
 test: test-unit test-integration ## Run the full test suite
 

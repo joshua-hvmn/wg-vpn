@@ -28,6 +28,9 @@ process_command() {
     config | --configure)
         cmd_config "$@"
         ;;
+    -v | --version | version)
+        cmd_version
+        ;;
     *)
         die "unknown command: $cmd"
         ;;

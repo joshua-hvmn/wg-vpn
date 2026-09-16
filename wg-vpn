@@ -31,8 +31,19 @@ DEPENDENCIES=(
     "nmcli"
     "ufw"
     "sudo"
+    "ip"
     "flock"
 )
+declare -a ALLOWED_SUBNETS=()
+
+# Non-interactive mode: set NONINTERACTIVE=1, or run under CI / without a TTY.
+# When active, prompts take the safe default (or fail) instead of hanging.
+if [[ -n "${NONINTERACTIVE:-}" || -n "${CI:-}" ]]; then
+    NONINTERACTIVE=1
+else
+    NONINTERACTIVE=0
+fi
+
 ENTRYPOINT_LOADED="true"
 
 # Source scripts

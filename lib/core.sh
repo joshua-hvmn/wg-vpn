@@ -14,6 +14,9 @@ die() {
 error() {
     printf 'error: %s\n' "$*" >&2
 }
+warn() {
+    printf 'warning: %s\n' "$*" >&2
+}
 info() {
     printf '→ %s\n' "$*"
 }
@@ -28,6 +31,7 @@ acquire_lock() {
 
     if [[ "$LOCK_ACQUIRED" -eq 1 ]]; then
         [[ "$LOCK_MODE" == "$mode" ]] && return 0
+        [[ "$LOCK_MODE" == "exclusive" && "$mode" == "shared" ]] && return 0
     else
         mkdir -p "$STATE_DIR"
         exec {LOCK_FD}>"$LOCK_FILE"
@@ -41,14 +45,15 @@ acquire_lock() {
     LOCK_MODE="$mode"
 }
 
-rollback_on_error() {
-    error "VPN startup failed, or the script was otherwise interrupted. Rolling back..."
+_cleanup_vpn() {
+    local from_trap="${1:-0}"
+    [ "$from_trap" -eq 1 ] && error "VPN startup failed, or the script was otherwise interrupted. Rolling back..."
 
     # 1. Restore UFW default outgoing policy
     if [[ -n "${PREV_UFW_POLICY:-}" ]]; then
-        sudo ufw default "$PREV_UFW_POLICY" outgoing >/dev/null 2>&1
+        sudo ufw default "$PREV_UFW_POLICY" outgoing >/dev/null 2>&1 || true
     else
-        sudo ufw default allow outgoing >/dev/null 2>&1
+        sudo ufw default allow outgoing >/dev/null 2>&1 || true
     fi
 
     # 2. Delete endpoint rule
@@ -62,6 +67,14 @@ rollback_on_error() {
     fi
 
     # 4. Delete allowed subnets
+    if [[ "${#ALLOWED_SUBNETS[@]}" -eq 0 ]]; then
+        if [[ -f "${STATE_FILE:-}" ]]; then
+            get_list_from_map_file "ALLOWED_SUBNET" "$STATE_FILE" "ALLOWED_SUBNETS" || true
+        fi
+        if [[ "${#ALLOWED_SUBNETS[@]}" -eq 0 && -f "${SUBNETS_FILE:-}" ]]; then
+            get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS" || true
+        fi
+    fi
     if [[ "${#ALLOWED_SUBNETS[@]}" -gt 0 ]]; then
         for subnet in "${ALLOWED_SUBNETS[@]}"; do
             sudo ufw delete allow out to "$subnet" >/dev/null 2>&1 || true
@@ -78,8 +91,16 @@ rollback_on_error() {
         fi
     fi
 
-    sudo ufw reload >/dev/null 2>&1
-    rm -f "$STATE_FILE"
+    sudo ufw reload >/dev/null 2>&1 || true
+
+    if [[ -f "${STATE_FILE:-}" ]]; then
+        rm -f "$STATE_FILE"
+    fi
+}
+
+rollback_on_error() {
+    trap - EXIT
+    _cleanup_vpn 1
     info "Rollback complete. Network restored to previous state."
 }
 
@@ -137,23 +158,49 @@ get_list_from_list_file() {
     local line
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}" # Strip comments
-        line="${line// /}" # Strip whitespaces
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
         [[ -n "$line" ]] && _list_target_ref+=("$line")
     done <"$file"
 }
 
 ## [Y/n]
-#  - Move the '' to the no section to change to default no.
+#  USAGE: yes_no [prompt message] [default answer]
+#  Pass y or n after the message argument to change the default enter option and the displayed
+#  answer in the non-interactive output
 yes_no() {
     local msg="${1:-''}"
+    local default="${2:-y}"
+    local silent_return_val prompt
+
+    case "$default" in
+    n | N | [nN]o | [nN]O | [nN][oO])
+        prompt="[y/N]"
+        silent_return_val=1
+        ;;
+    [yY] | [yY]es | [yY][eE][sS])
+        prompt="[Y/n]"
+        silent_return_val=0
+        ;;
+    *)
+        die "internal error: incorrect usage: 'yes_no \"$msg\" \"$default\"'"
+        ;;
+    esac
+
+    if [[ "$NONINTERACTIVE" -eq 1 ]]; then
+        info "(non-interactive) $msg $prompt: $default"
+        return "$silent_return_val"
+    fi
+
     local response
     while true; do
-        read -r -p "$msg [Y/n]: " response >&2
+        read -r -p "$msg $prompt: " response || return 1
+        [[ -z "$response" ]] && response="$default"
         case "$response" in
         n | N | [nN]o | [nN]O | [nN][oO])
             return 1
             ;;
-        '' | [yY] | [yY]es | [yY][eE][sS])
+        [yY] | [yY]es | [yY][eE][sS])
             return 0
             ;;
         *)
@@ -274,21 +321,86 @@ edit_kv() {
     }
 }
 
+## Original destination of every conntrack entry in one address family
+conntrack_destinations() {
+    local family="$1"
+    shift
+    sudo conntrack -L -f "$family" "$@" 2>/dev/null |
+        awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^dst=/) { print substr($i, 5); break } }' ||
+        true
+}
+
+## Delete every entry in a family whose destination the kill-switch rejects
+flush_family() {
+    local family="$1"
+    shift
+
+    local all
+    all=$(conntrack_destinations "$family")
+    [[ -n "$all" ]] || return 0
+
+    local keep="" net
+    for net in "$@"; do
+        keep+="$(conntrack_destinations "$family" -d "$net")"$'\n'
+    done
+
+    local dst
+    while read -r dst; do
+        [[ -n "$dst" ]] || continue
+        sudo conntrack -D -f "$family" -d "$dst" >/dev/null 2>&1 || true
+    done < <(comm -23 <(printf '%s\n' "$all" | sort -u) <(printf '%s\n' "$keep" | sort -u))
+}
+
+## Flush established flows
+#  ufw accepts RELATED,ESTABLISHED on output before any user rule, so connections opened before
+#  the kill-switch armed will use the old routes until their conntrack entries are gone
+#
+#  Only the entries the new rules would reject are deleted, rather than using 'conntrack -F',
+#  which would kill an inbound SSH connection controlling the environment.
+flush_established_flows() {
+    if ! command -v conntrack >/dev/null 2>&1; then
+        warn "conntrack not found. Connections opened before now may keep"
+        info "using the previous route. Install conntrack-tools to close this gap."
+    fi
+
+    local -a preserve=()
+    if [[ -n "${ENDPOINT_IP:-}" ]]; then
+        preserve+=("$ENDPOINT_IP")
+    fi
+    if [[ "${#ALLOWED_SUBNETS[@]}" -gt 0 ]]; then
+        preserve+=("${ALLOWED_SUBNETS[@]}")
+    fi
+
+    # Preserves any inbound connection
+    # NOTE: consider, this may be a security risk
+    local addr
+    while read -r addr; do
+        [[ -n "$addr" ]] && preserve+=("$addr")
+    done < <(ip -o addr show 2>/dev/null | awk '{split($4, a, "/"); print a[1]}')
+
+    local family
+    for family in ipv4 ipv6; do
+        flush_family "$family" "${preserve[@]}"
+    done
+}
+
 ensure_subnets_file() {
     [[ -f "$SUBNETS_FILE" ]] && return 0
     info "Generating default private subnets list..."
     mkdir -p "$CONFIG_DIR"
     cat >"$SUBNETS_FILE" <<'EOF'
 # Local network subnets to bypass the VPN kill-switch
-# These are standard CIDR local ranges.
-# Add or remove allowed IPs below as needed.
+# These are standard CIDR local ranges (IPv4 and IPv6).
+# Add or remove allowed IPs below as needed. One per line.
 10.0.0.0/8
 172.16.0.0/12
 192.168.0.0/16
+fc00::/7
 EOF
 }
 
-load_env() {
+## load required files
+load_config() {
     init_config
     ensure_subnets_file
 
@@ -303,11 +415,16 @@ load_env() {
     [[ -n "${WG_CONFIG_FILE:-}" ]] || die "WG_CONFIG_FILE not set in $CONFIG_FILE"
 
     CONFIG_PATH="${WG_CONFIG_DIR%/}/${WG_CONFIG_FILE}"
-    [[ -f "$CONFIG_PATH" ]] || die "config file not found: $CONFIG_PATH"
 
     # Connection name = filename without .conf (nmcli default behaviour)
     CONNECTION_NAME="${WG_CONFIG_FILE%.conf}"
     export CONFIG_PATH CONNECTION_NAME
+}
+
+# 'up' needs an additional check, but it would kill teardown
+load_env() {
+    load_config
+    [[ -f "$CONFIG_PATH" ]] || die "config file not found: $CONFIG_PATH"
 }
 
 load_state_file() {
@@ -336,16 +453,29 @@ parse_endpoint() {
 
     # Strip inline comments
     line="${line%%#*}"
-    # Strip key and whitespace
+    # Strip key and leading/trailing whitespace
     line="${line#*=}"
-    line="${line// /}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
 
-    ENDPOINT_IP="${line%:*}"
-    ENDPOINT_IP="${ENDPOINT_IP//[\[\]]/}"
-    ENDPOINT_PORT="${line##*:}"
+    if [[ "$line" == \[*\]:* ]]; then
+        # IPv6
+        ENDPOINT_IP="${line#\[}"
+        ENDPOINT_IP="${ENDPOINT_IP%%\]*}"
+        ENDPOINT_PORT="${line##*\]:}"
+    else
+        # IPv4
+        ENDPOINT_IP="${line%:*}"
+        ENDPOINT_PORT="${line##*:}"
+    fi
 
-    [[ -n "$ENDPOINT_IP" && -n "$ENDPOINT_PORT" ]] ||
-        die "failed to parse Endpoint from $CONFIG_PATH"
+    ENDPOINT_IP="${ENDPOINT_IP#"${ENDPOINT_IP%%[![:space:]]*}"}"
+    ENDPOINT_IP="${ENDPOINT_IP%"${ENDPOINT_IP##*[![:space:]]}"}"
+    ENDPOINT_PORT="${ENDPOINT_PORT#"${ENDPOINT_PORT%%[![:space:]]*}"}"
+    ENDPOINT_PORT="${ENDPOINT_PORT%"${ENDPOINT_PORT##*[![:space:]]}"}"
+
+    [[ -n "$ENDPOINT_IP" && -n "$ENDPOINT_PORT" && "$ENDPOINT_PORT" =~ ^[0-9]+$ ]] ||
+        die "failed to parse Endpoint from $CONFIG_PATH (got ip='$ENDPOINT_IP' port='$ENDPOINT_PORT')"
 
     export ENDPOINT_IP ENDPOINT_PORT
 }
@@ -367,7 +497,7 @@ capture_pre_vpn_state() {
         PREV_UFW_POLICY="$raw"
         ;;
     *)
-        info "Warning: could not reliably determine the current UFW outgoing policy (got: '${raw:-<empty>}')."
+        warn "could not reliably determine the current UFW outgoing policy (got: '${raw:-<empty>}')."
         info "Defaulting to 'allow' on teardown. If your previous policy was 'deny' or 'reject', re-apply it manually: sudo ufw default <policy> outgoing"
         PREV_UFW_POLICY="allow"
         ;;
@@ -431,10 +561,12 @@ check_ufw_active() {
     ufw_status=$(sudo ufw status 2>/dev/null | head -1)
 
     if [[ "$ufw_status" != "Status: active" ]]; then
-        info "Security Warning: UFW is installed but not active."
+        warn "security: UFW is installed but not active."
         info "wg-vpn's kill-switch relies entirely on UFW enforcing its rules;"
         info "with UFW inactive, no traffic will actually be blocked."
-
+        if [[ "${NONINTERACTIVE:-0}" -eq 1 ]]; then
+            die "UFW is not active. Enable it manually or run interactively. Aborting."
+        fi
         if yes_no "Would you like wg-vpn to enable UFW now?"; then
             sudo ufw --force enable >/dev/null 2>&1 || die "Failed to enable UFW."
             info "UFW enabled."
@@ -450,7 +582,7 @@ check_ufw_ipv6() {
     [[ -f "$ufw_config" ]] || return 0 # Skip for test environments
 
     if grep -q -i "^IPV6=no" "$ufw_config" || ! grep -q -i "^IPV6=yes" "$ufw_config"; then
-        info "Security Warning: UFW is not configured to manage IPv6."
+        warn "security: UFW is not configured to manage IPv6."
         info "This is required to prevent data leaks when the VPN killswitch is active."
 
         if yes_no "Would you like wg-vpn to automatically enable UFW IPv6 support now?"; then

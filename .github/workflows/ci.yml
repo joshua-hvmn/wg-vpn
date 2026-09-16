@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main, next]
+    branches: [main, next, "feat/**"]
   pull_request:
     branches: [main, next]
 
@@ -40,10 +40,10 @@ jobs:
           ubuntu|debian)
             apt-get update -qq
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-              shellcheck shfmt bats git ca-certificates make
+              shellcheck shfmt bats git ca-certificates make python3
             ;;
           arch)
-            pacman -Sy --noconfirm --needed shellcheck shfmt bats git make
+            pacman -Sy --noconfirm --needed shellcheck shfmt bats git make python
             ;;
           esac
         shell: bash
@@ -88,18 +88,15 @@ jobs:
         shell: bash
 
   integration-test:
-    name: Killswitch Integration Test
+    name: Kill-switch Integration Test
     needs: unit-tests # Waits for fast tests to pass first
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y bats ufw iproute2 python3
+      - name: Load the WireGuard module
+        run: sudo modprobe wireguard || echo "wireguard unavailable; the suite will use a veth"
 
-      - name: Run Integration Test
-        # CI=true is automatically set by GitHub, so the Makefile
-        # routes to the raw bats execution.
-        run: sudo -E make test-integration
+      - name: Run kill-switch integration suite
+        run: make test-integration

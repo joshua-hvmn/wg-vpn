@@ -3,6 +3,7 @@ setup_mocks() {
     # Create an isolated environment for config and state
     export XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/config"
     export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
+    export NONINTERACTIVE=1
     mkdir -p "$XDG_CONFIG_HOME/wg-vpn" "$XDG_STATE_HOME/wg-vpn"
 
     # Create dummy wg-vpn.conf so script passes init checks
@@ -49,6 +50,10 @@ fi
 # the interactive "enable UFW?" prompt during tests.
 if [[ "$cmd" == "sudo" && "\$*" == "ufw status" ]]; then
     echo "Status: active"
+fi
+if [[ "$cmd" == "sudo" && "\$*" == "ufw status verbose" ]]; then
+    echo "Status: active"
+    echo "Default: deny (incoming), allow (outgoing), disabled (routed)"
 fi
 EOF
         chmod +x "$MOCK_BIN_DIR/$cmd"

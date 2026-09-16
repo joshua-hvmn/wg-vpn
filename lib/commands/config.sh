@@ -6,6 +6,20 @@ fi
 
 # DATA/STATE LAYER
 
+_create_empty_config() {
+    if [[ ! -f "${CONFIG_FILE:-}" ]]; then
+        cat >"$CONFIG_FILE" <<EOF
+# wg-vpn configuration
+# fill in the values below, and run wg-vpn on
+
+WG_CONFIG_DIR=
+WG_CONFIG_FILE=
+EOF
+        info "Created empty config at $CONFIG_FILE"
+        info "Edit it manually, then run 'wg-vpn', or run 'wg-vpn' again to be prompted again."
+    fi
+}
+
 ## Guided first-time / repair setup for wg-vpn.conf and subnets.list
 # USAGE: init_config
 init_config() {
@@ -29,6 +43,12 @@ init_config() {
     [[ "$needs_setup" -eq 0 ]] && return 0
 
     mkdir -p "$CONFIG_DIR" || die "Could not create config directory: $CONFIG_DIR"
+
+    if [[ "${NONINTERACTIVE:-0}" -eq 1 ]]; then
+        _create_empty_config
+        ensure_subnets_file
+        return 0
+    fi
 
     if yes_no "Would you like to configure wg-vpn now?"; then
         mkdir -p "${CONFIG_FILE%/*}"
@@ -54,17 +74,7 @@ init_config() {
         info "Configuration saved to $CONFIG_FILE"
     else
         # Create skeleton config
-        if [[ ! -f "${CONFIG_FILE:-}" ]]; then
-            cat >"$CONFIG_FILE" <<EOF
-# wg-vpn configuration
-# fill in the values below, and run wg-vpn on
-
-WG_CONFIG_DIR=
-WG_CONFIG_FILE=
-EOF
-            info "Created empty config at $CONFIG_FILE"
-            info "Edit it manually, then run 'wg-vpn', or run 'wg-vpn' again to be prompted again."
-        fi
+        _create_empty_config
     fi
 
     ensure_subnets_file
@@ -163,7 +173,9 @@ _set_wg_dir_and_select() {
     local dir="$1"
     edit_kv "WG_CONFIG_DIR" "$dir" "$CONFIG_FILE"
     info "WG_CONFIG_DIR set to: $dir"
-    _interactive_wg_select "$dir" || true
+    if [[ "${NONINTERACTIVE:-0}" -eq 0 ]]; then
+        _interactive_wg_select "$dir" || true
+    fi
 }
 
 # Manual fallback
@@ -297,6 +309,10 @@ cmd_config_wg() {
         ;;
     esac
 
+    if [[ "${NONINTERACTIVE:-0}" -eq 1 ]]; then
+        die "config wg requires arguments in non-interactive mode (e.g. wg-vpn config wg /path/to/dir)"
+    fi
+
     # Interactive handling
     local current_dir current_file
     current_dir=$(get_env_var "WG_CONFIG_DIR" "$CONFIG_FILE")
@@ -329,6 +345,10 @@ cmd_config_subnets() {
             info "Added '$subnet' to allowed subnets."
         fi
         return 0
+    fi
+
+    if [[ "${NONINTERACTIVE:-0}" -eq 1 ]]; then
+        die "config subnets requires a CIDR argument in non-interactive mode"
     fi
 
     while true; do
