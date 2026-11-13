@@ -1,0 +1,13 @@
+# How wg-vpn is developed, read by git-workflow
+# (https://github.com/joshua-hvmn/git-workflow): git flow, with pull requests
+# for topics, and releases and hotfixes merged locally, so main, next and the
+# tag go out in one atomic push. Your own git config overrides any of it for
+# your clone.
+[workflow]
+    flow = gitflow
+
+[workflow "release"]
+    integrate = merge
+
+[workflow "hotfix"]
+    integrate = merge
