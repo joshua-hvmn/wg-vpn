@@ -44,7 +44,7 @@ jobs:
               shellcheck shfmt bats git ca-certificates make python3
             ;;
           arch)
-            pacman -Sy --noconfirm --needed shellcheck shfmt bats git make python
+            pacman -Syu --noconfirm --needed shellcheck shfmt bats git make python
             ;;
           esac
         shell: bash
