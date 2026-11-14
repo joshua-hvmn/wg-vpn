@@ -1,9 +1,8 @@
 name: CI
 on:
   push:
-    branches: [main, next, "feat/**"]
+    branches: [main, next, "release/**", "hotfix/**"]
   pull_request:
-    branches: [main, next]
 
 permissions:
   contents: read
@@ -31,7 +30,9 @@ jobs:
       image: ${{ matrix.image }}
       options: --user root
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install tools
         run: |
@@ -54,38 +55,10 @@ jobs:
       - name: Test
         run: make test-unit
 
-      - name: Test Makefile Installation
-        run: |
-          set -euo pipefail
-          # Install in CI container
-          make install prefix=/usr
-
-          # 1. Verify file placement
-          test -x "/usr/bin/wg-vpn"
-          test -d "/usr/share/wg-vpn"
-          test -f "/usr/share/wg-vpn/core.sh" 
-          test -f "/usr/share/wg-vpn/routers.sh" 
-          test -f "/usr/share/wg-vpn/commands/misc.sh"
-          test -f "/usr/share/wg-vpn/commands/toggle-vpn.sh" 
-          test -f "/usr/share/wg-vpn/commands/config.sh"
-
-          # 2. Verify sed injection patched local LIB_DIR
-          grep -q "/usr/share/wg-vpn" "/usr/bin/wg-vpn" || {
-            echo "ERROR: Makefile failed to patch LIB_DIR variable."
-            exit 1
-          }
-
-          # 3. Smoke test the installed binary
-          "/usr/bin/wg-vpn" help | grep -q "Usage:" || {
-            echo ERROR: 'wg-vpn help' smoke test failed.
-            exit 1
-          }
-
-          # 4. Verify uninstall cleanup
-          make uninstall prefix=/usr
-          test ! -e "/usr/bin/wg-vpn"
-          test ! -e "/usr/share/wg-vpn"
-        shell: bash
+      # Installs into a temporary prefix, runs that copy (help, version), then
+      # checks that uninstall leaves nothing behind
+      - name: Install check
+        run: make installcheck
 
   integration-test:
     name: Kill-switch Integration Test
@@ -93,8 +66,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Load the WireGuard module
         run: sudo modprobe wireguard || echo "wireguard unavailable; the suite will use a veth"
 

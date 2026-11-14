@@ -6,7 +6,7 @@
    UFW’s default outgoing policy is set to `deny`. Only explicit `allow out` rules permit traffic.
 
 2. **Endpoint is port-scoped**  
-   Only UDP traffic to the exact `Endpoint` IP/hostname and port from the WireGuard config is allowed outside the tunnel. Other ports on the same host are blocked.
+   Only UDP traffic to the exact `Endpoint` address and port from the WireGuard config is allowed outside the tunnel. Other ports on the same host are blocked.
 
 3. **Tunnel interface is allowed**  
    After the connection is up, `allow out on <wg-iface>` is installed. All traffic that leaves via the WireGuard device is permitted.
@@ -15,13 +15,13 @@
    Only the CIDRs listed in `~/.config/wg-vpn/subnets.list` (IPv4 or IPv6) receive an `allow out to` rule. An IPv4 CIDR does **not** open the corresponding IPv6 range and vice versa.
 
 5. **Established flows are flushed**  
-   Before the policy becomes restrictive, `wg-vpn` deletes conntrack entries whose destination would be rejected by the new rules. This closes the window created by UFW’s stock `RELATED,ESTABLISHED` accept rule on the OUTPUT chain.
+   Right after the policy becomes restrictive, `wg-vpn` deletes conntrack entries whose destination the new rules reject (this needs `conntrack-tools`; without it, `up` warns and such connections live on until they close). This closes the window created by UFW’s stock `RELATED,ESTABLISHED` accept rule on the OUTPUT chain.
 
 6. **Rollback on failure**  
    Any interruption during `up` (including a failed `nmcli connection up`) restores the previous UFW policy, removes the rules that were added, and deletes the managed connection profile.
 
 7. **UFW must be active and IPv6-aware**  
-   The tool refuses to arm the kill-switch if UFW is inactive or if `IPV6=yes` is not set in `/etc/default/ufw`.
+   The kill-switch is never armed while UFW is inactive or `IPV6=yes` is not set in `/etc/default/ufw`. At a terminal, `wg-vpn` offers to fix either one first; without one (`NONINTERACTIVE=1`, CI) it stops.
 
 ## Deliberate trade-offs
 
@@ -35,7 +35,7 @@ If a connection with the same name already exists and was **not** created by `wg
 
 ### Hostname endpoints
 
-When the WireGuard config contains a hostname, the initial `ufw allow out to <hostname> \ldots` is issued before the default deny. UFW resolves the name at rule-install time. Subsequent resolution changes are not tracked; prefer numeric endpoints for the highest assurance.
+`Endpoint` must be a numeric IPv4 or IPv6 address. UFW rules take addresses only, and once outgoing traffic is denied a name could not be resolved again to reconnect, so `up` stops on a hostname before it changes anything. Only the first `Endpoint` in the config gets a rule.
 
 ## What the kill-switch does **not** protect against
 

@@ -4,8 +4,6 @@ if [[ "$ENTRYPOINT_LOADED" != "true" ]]; then
     exit 1
 fi
 
-# TODO: Split core up
-
 # Helpers
 die() {
     printf 'error: %s\n' "$*" >&2
@@ -361,6 +359,7 @@ flush_established_flows() {
     if ! command -v conntrack >/dev/null 2>&1; then
         warn "conntrack not found. Connections opened before now may keep"
         info "using the previous route. Install conntrack-tools to close this gap."
+        return 0
     fi
 
     local -a preserve=()
@@ -371,8 +370,7 @@ flush_established_flows() {
         preserve+=("${ALLOWED_SUBNETS[@]}")
     fi
 
-    # Preserves any inbound connection
-    # NOTE: consider, this may be a security risk
+    # Preserves any inbound connection (security trade-off is in SECURITY.md)
     local addr
     while read -r addr; do
         [[ -n "$addr" ]] && preserve+=("$addr")
@@ -480,6 +478,13 @@ parse_endpoint() {
     export ENDPOINT_IP ENDPOINT_PORT
 }
 
+## ufw rules take addresses, not names ("Bad destination address"), and a name
+#  couldn't be looked up again once outgoing traffic is denied
+require_numeric_endpoint() {
+    [[ "$ENDPOINT_IP" == *:* || "$ENDPOINT_IP" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && return 0
+    die "Endpoint '$ENDPOINT_IP' in $CONFIG_PATH is a hostname, and wg-vpn needs an address. Look it up (getent ahosts $ENDPOINT_IP) and put the address in the config."
+}
+
 check_deps() {
     for dep in "${DEPENDENCIES[@]}"; do
         command -v "$dep" >/dev/null 2>&1 || die "Missing dependency: $dep"
@@ -584,6 +589,9 @@ check_ufw_ipv6() {
     if grep -q -i "^IPV6=no" "$ufw_config" || ! grep -q -i "^IPV6=yes" "$ufw_config"; then
         warn "security: UFW is not configured to manage IPv6."
         info "This is required to prevent data leaks when the VPN killswitch is active."
+        if [[ "${NONINTERACTIVE:-0}" -eq 1 ]]; then
+            die "UFW does not manage IPv6. Set IPV6=yes in $ufw_config, or run interactively. Aborting."
+        fi
 
         if yes_no "Would you like wg-vpn to automatically enable UFW IPv6 support now?"; then
             sudo sed -i 's/^IPV6=no/IPV6=yes/i' "$ufw_config" || true

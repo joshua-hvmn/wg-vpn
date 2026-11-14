@@ -77,3 +77,9 @@ conf_val() {
 	[ "$status" -eq 0 ]
 	[ "$(conf_val WG_CONFIG_DIR)" = "$BATS_TEST_TMPDIR/argtest" ]
 }
+
+@test "config with no arguments opens the menu" {
+	run ./wg-vpn config <<<"x"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"wg-vpn Configuration"* ]]
+}

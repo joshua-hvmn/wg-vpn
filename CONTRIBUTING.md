@@ -3,7 +3,7 @@
 ## Development setup
 
 ```bash
-git clone <repo>
+git clone https://github.com/joshua-hvmn/wg-vpn.git
 cd wg-vpn
 make lint
 make test-unit
@@ -16,7 +16,7 @@ make test-integration   # requires Docker
 - 4-space indent (`shfmt -i 4`)
 - `shellcheck -x -s bash` must be clean
 - Prefer small, single-purpose functions
-- Never prompt when `NONINTERACTIVE=1` or stdin is not a TTY
+- Never prompt when `NONINTERACTIVE=1` (or `CI` is set); a prompt that hits end of input takes "no"
 
 ## Tests
 
@@ -29,5 +29,5 @@ make test-integration   # requires Docker
 
 1. Keep the change focused.
 2. Update or add tests for any behavioural change.
-3. Run `make check` (or at least `make lint test-unit`).
+3. Run `make check` (it needs Docker for the integration suite), or at least `make lint test-unit`.
 4. Do not commit real WireGuard private keys or production configs.

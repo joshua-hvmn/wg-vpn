@@ -21,6 +21,7 @@ RM				?= rm -f
 SHFMT			?= shfmt
 SHELLCHECK		?= shellcheck
 BATS			?= bats
+GIT				?= git
 
 # Standard directory variables
 DESTDIR			?=
@@ -37,6 +38,11 @@ applibdir	    := $(datadir)/wg-vpn
 TARGET			:= wg-vpn
 TMP_TARGET		:= $(TARGET).tmp
 
+# `make dist` archives this ref under this name (the release workflow passes the tag)
+VERSION			:= $(shell cat VERSION 2>/dev/null)
+DIST_REF		?= HEAD
+DIST_NAME		?= $(TARGET)-$(VERSION)
+
 # Test Variables
 # Add variables to both to add dirs to the lint test
 test_libdir		?= lib
@@ -51,7 +57,7 @@ else
 	Q := @
 endif
 
-.PHONY: all help build install uninstall check lint test test-unit test-integration test-integration-host check clean
+.PHONY: all help build install uninstall installcheck check lint test test-unit test-integration test-integration-host dist clean FORCE
 
 all: build ## Build the script (default target)
 
@@ -68,7 +74,9 @@ help: ## Show this help message
 
 build: $(TMP_TARGET) ## Inject install paths into a local copy of the script
 
-$(TMP_TARGET): $(TARGET)
+# Always rebuilt: the path baked in depends on prefix, which make can't see
+# changing between `make` and `make install prefix=...`
+$(TMP_TARGET): $(TARGET) FORCE
 	@printf ' %-8s %s\n' "SED" "$(TARGET) -> $(TMP_TARGET)"
 	$(Q)$(SED) -e "s|@LIBDIR@|$(applibdir)|g" $(TARGET) > $(TMP_TARGET)
 	$(Q)chmod +x $(TMP_TARGET)
@@ -109,6 +117,28 @@ uninstall: ## Remove installed system files
 	@echo "  rm -rf ~/.config/wg-vpn ~/.local/state/wg-vpn"
 	@echo "Uninstallation complete."
 
+# The temporary prefix has a space in it, to prove the quoting holds up.
+installcheck: ## Install into a temporary prefix, run that copy, then check uninstall leaves nothing
+	$(Q)tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	p="$$tmp/install root" && \
+	printf ' %-8s %s\n' "INSTALL" "$$p" && \
+	$(MAKE) --no-print-directory install prefix="$$p" >/dev/null && \
+	for f in core.sh routers.sh commands/misc.sh commands/config.sh commands/toggle-vpn.sh VERSION; do \
+		[ -f "$$p/share/wg-vpn/$$f" ] || { echo "error: $$f was not installed" >&2; exit 1; }; \
+	done && \
+	printf ' %-8s %s\n' "TEST" "$$p/bin/$(TARGET)" && \
+	"$$p/bin/$(TARGET)" help | grep -q 'Usage:' && \
+	have=$$("$$p/bin/$(TARGET)" version) && \
+	if [ "$$have" != "$(TARGET) $(VERSION)" ]; then \
+		echo "error: the installed copy says '$$have', not '$(TARGET) $(VERSION)'" >&2; exit 1; \
+	fi && \
+	printf ' %-8s %s\n' "UNINST" "$$p" && \
+	$(MAKE) --no-print-directory uninstall prefix="$$p" >/dev/null && \
+	left=$$($(FIND) "$$p" -type f -o -type l) && \
+	if [ -n "$$left" ]; then \
+		printf 'error: uninstall left these behind:\n%s\n' "$$left" >&2; exit 1; \
+	fi
+
 lint: ## Run shellcheck and shfmt over the script and libraries
 	@command -v $(SHELLCHECK) >/dev/null 2>&1 || { echo "error: shellcheck not found in PATH." >&2; exit 1; }
 	@command -v $(SHFMT) >/dev/null 2>&1 || { echo "error: shfmt not found in PATH." >&2; exit 1; }
@@ -144,13 +174,21 @@ test-integration-host: ## DESTRUCTIVE: run the kill-switch test suite on this ho
 		echo "run 'make test-integration' to use the container instead." >&2; \
 		exit 1; \
 	fi
-	$(Q)WPVPN_ALLOW_UFW_RESET=1 $(BATS) --print-output-on-failure \
+	$(Q)WGVPN_ALLOW_UFW_RESET=1 $(BATS) --print-output-on-failure \
 		test/integration/killswitch.bats $(BATS_ARGS)
 
 test: test-unit test-integration ## Run the full test suite
 
 check: lint test ## Run lint and test together
 
+dist: ## Archive DIST_REF as DIST_NAME.tar.gz plus a sha256 file (the release workflow runs this)
+	@printf ' %-8s %s\n' "ARCHIVE" "$(DIST_NAME).tar.gz"
+	$(Q)$(GIT) archive --format=tar.gz --prefix="$(DIST_NAME)/" -o "$(DIST_NAME).tar.gz" "$(DIST_REF)"
+	@printf ' %-8s %s\n' "SHA256" "$(DIST_NAME).tar.gz.sha256"
+	$(Q)sha256sum "$(DIST_NAME).tar.gz" >"$(DIST_NAME).tar.gz.sha256"
+
 clean: ## Remove build artifacts
-	@printf ' %-8s %s\n' "RM" "$(TMP_TARGET)"
-	$(Q)$(RM) $(TMP_TARGET)
+	@printf ' %-8s %s\n' "RM" "$(TMP_TARGET) $(DIST_NAME).tar.gz $(DIST_NAME).tar.gz.sha256"
+	$(Q)$(RM) $(TMP_TARGET) "$(DIST_NAME).tar.gz" "$(DIST_NAME).tar.gz.sha256"
+
+FORCE:

@@ -1,106 +1,229 @@
+# Tag-triggered release, paired with `git workflow branch pre` and `git workflow branch finish`
+# (`git b pre` and `git b finish` with the default aliases).
+#
+#   v1.3.0-rc.1  (any tag containing "-")  -> GitHub *prerelease*, from any branch
+#   v1.3.0       (plain vX.Y.Z)            -> full release, only if the commit is on main
+#
+# Two jobs:
+#   build    checks, lint, tests (unit, kill-switch integration, install), tarball,
+#            release notes. No secrets, read-only token.
+#   publish  runs in the `release` environment: waits for your approval, then signs
+#            the tarball with your GPG key, attests build provenance, and publishes.
+#            It never checks out or runs the repo's code, so the signing key is
+#            never in the same job as the test suite.
+#
+# Setup (once): Settings -> Environments -> `release`
+#   - Required reviewers: you (leave "Prevent self-review" off if you're the only one)
+#   - Deployment branches and tags: "Selected branches and tags" -> add tag rule `v*`
+#   - Environment secrets:   GPG_PRIVATE_KEY (armored), GPG_PASSPHRASE
+#   - Environment variables: GPG_FINGERPRINT (this repo's signing subkey, or your
+#     primary key's fingerprint). The primary key must be on keyserver.ubuntu.com.
+#
+# Ported from git-workflow's release workflow; the "Lint and test" and "Build"
+# steps are this project's own.
 name: Release
 
 on:
   push:
-    tags: ["v*.*.*"]
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version tag (e.g., v1.0.0 or v1.2.3-rc.1)"
-        required: true
-        type: string
+    tags: ["v*"]
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
+permissions: {}
 
 jobs:
-  release:
-    name: Publish Release
+  build:
     runs-on: ubuntu-latest
-    environment: release
-    if: >
-      startsWith(github.ref, 'refs/tags/') ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
-
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # 4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # full history and tags, for the "is it on main" check
+          persist-credentials: false
 
-      - name: Determine Version
-        id: version
+      - name: Classify tag
+        id: tag
         run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${{ github.ref_name }}"
-          fi
-
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
-            echo "Invalid version format: $VERSION (Expected vX.Y.Z or vX.Y.Z-prerelease)"
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$GITHUB_REF_NAME' is not vX.Y.Z or vX.Y.Z-<prerelease>."
             exit 1
           fi
+          case "$GITHUB_REF_NAME" in
+            *-*) echo "prerelease=true"  >>"$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >>"$GITHUB_OUTPUT" ;;
+          esac
 
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-        shell: bash
-
-      # Add more files to the release package in the copy section below
-      - name: Package
+      - name: Stable tags must be on main
+        if: steps.tag.outputs.prerelease == 'false'
         run: |
-          set -euo pipefail
-          PKG_NAME="wg-vpn-${VERSION}"
-          PKG_DIR="$PKG_NAME"
+          commit=$(git rev-parse "$GITHUB_REF_NAME^{commit}")
+          git merge-base --is-ancestor "$commit" origin/main || {
+            echo "::error::$GITHUB_REF_NAME is not on main; stable releases come from 'git workflow branch finish'."
+            exit 1
+          }
 
-          mkdir -p "$PKG_DIR"
-          cp wg-vpn "$PKG_DIR/"
-          cp -a lib "$PKG_DIR/"
-          cp README.md LICENSE Makefile "$PKG_DIR/"
+      - name: VERSION must match the tag
+        run: |
+          want="${GITHUB_REF_NAME%%-*}" # v1.3.0-rc.1 -> v1.3.0
+          have=$(tr -d '[:space:]' <VERSION)
+          [ "$have" = "$want" ] || [ "v$have" = "$want" ] || {
+            echo "::error::VERSION says $have but the tag is $GITHUB_REF_NAME. Bump VERSION on the release branch."
+            exit 1
+          }
 
-          # Embed version into a file
-          printf '%s\n' "$VERSION" > "$PKG_DIR/VERSION"
+      # `make test` is the unit suite and the kill-switch integration suite (in
+      # a container, against a real ufw); a real WireGuard tunnel if the module loads
+      - name: Lint and test
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bats shellcheck shfmt
+          sudo modprobe wireguard || echo "wireguard unavailable; the suite will use a veth"
+          make lint test installcheck
 
-          tar -czf "${PKG_NAME}.tar.gz" "$PKG_DIR"
-          sha256sum "${PKG_NAME}.tar.gz" > "${PKG_NAME}.tar.gz.sha256"
+      - name: Build
+        id: build
+        run: |
+          name="wg-vpn-$GITHUB_REF_NAME"
+          make dist DIST_REF="$GITHUB_REF_NAME" DIST_NAME="$name"
+          mkdir dist && mv "$name.tar.gz" "$name.tar.gz.sha256" dist/
+          # Handed to publish as a job output, which doesn't go through artifact
+          # storage, so publish can tell if the tarball changed on the way
+          echo "sha256=$(cut -d ' ' -f 1 "dist/$name.tar.gz.sha256")" >>"$GITHUB_OUTPUT"
 
-          echo "=== Package contents ==="
-          tar -tzf "${PKG_NAME}.tar.gz"
-        shell: bash
+      # The CHANGELOG section for this version ("## v1.3.0 ..."); a prerelease
+      # uses the section of the version it leads up to.
+      - name: Release notes
+        run: |
+          version="${GITHUB_REF_NAME%%-*}"
+          awk -v v="$version" '/^## / { on = ($2 == v); next } on' CHANGELOG.md >dist/notes.md
+          if [ -s dist/notes.md ]; then
+            echo "Using the CHANGELOG section for $version"
+          else
+            echo "::warning::No '## $version' section in CHANGELOG.md; generating notes from commits."
+          fi
 
-      - name: Sign Release Artifacts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+    outputs:
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+      sha256: ${{ steps.build.outputs.sha256 }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release # waits for approval; only this job can read the key
+    permissions:
+      contents: write # create the release
+      id-token: write # sigstore certificate for the attestation
+      attestations: write # store the attestation
+    env:
+      TARBALL: wg-vpn-${{ github.ref_name }}.tar.gz
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+
+      # The tarball must be the one build made: checked against the hash build
+      # passed as a job output, not against the .sha256 file that travelled
+      # with it through artifact storage
+      - name: Check the tarball against build's hash
+        env:
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          [ -n "$SHA256" ] || { echo "::error::build passed no sha256 output."; exit 1; }
+          echo "$SHA256  $TARBALL" | sha256sum -c -
+          echo "$SHA256  $TARBALL" | cmp -s - "$TARBALL.sha256" || {
+            echo "::error::$TARBALL.sha256 doesn't match the hash build computed."
+            exit 1
+          }
+
+      - name: Sign
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_FINGERPRINT: ${{ vars.GPG_FINGERPRINT }}
+          KEYSERVER: hkps://keyserver.ubuntu.com
         run: |
           set -euo pipefail
-          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-          echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
-            --detach-sign --armor --output "wg-vpn-${VERSION}.tar.gz.sig" "wg-vpn-${VERSION}.tar.gz"
+          for v in GPG_PRIVATE_KEY GPG_PASSPHRASE GPG_FINGERPRINT; do
+            [ -n "${!v:-}" ] || { echo "::error::$v is not set on the 'release' environment."; exit 1; }
+          done
+          fpr="${GPG_FINGERPRINT//[[:space:]]/}"
+          fpr="${fpr^^}" # gpg prints fingerprints in upper case
 
-          gpg --verify "wg-vpn-${VERSION}.tar.gz.sig" "wg-vpn-${VERSION}.tar.gz" || {
-            echo "ERROR: GPG Signature verification failed!"
+          # Throwaway keyrings, removed when this step ends:
+          #   KEYS  the signing key from the secret
+          #   PUB   only your key as published on the keyserver: what users verify with
+          KEYS=$(mktemp -d) PUB=$(mktemp -d)
+          export GNUPGHOME="$KEYS"
+          trap 'for h in "$KEYS" "$PUB"; do GNUPGHOME=$h gpgconf --kill all || true; done; rm -rf "$KEYS" "$PUB"' EXIT
+
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          primary=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+
+          # Merge in the published key, so an expiry you extended (or a subkey you
+          # revoked) on your laptop takes effect without re-exporting the secret.
+          published=""
+          if GNUPGHOME=$PUB gpg --batch --quiet --keyserver "$KEYSERVER" --recv-keys "$primary"; then
+            GNUPGHOME=$PUB gpg --batch --export "$primary" | gpg --batch --quiet --import
+            published=1
+          else
+            echo "::warning::Could not fetch $primary from $KEYSERVER; using the key as stored in GPG_PRIVATE_KEY."
+          fi
+
+          printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+            --passphrase-fd 0 --local-user "$fpr" \
+            --detach-sign --armor --output "$TARBALL.sig" "$TARBALL" || {
+            echo "::error::Signing failed. Check GPG_PASSPHRASE, that GPG_FINGERPRINT is a key in GPG_PRIVATE_KEY, and that it hasn't expired."
             exit 1
           }
-        shell: bash
 
-      - name: Attest Build Provenance
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # 4.2.2
-        with:
-          subject-path: "wg-vpn-${{ env.VERSION }}.tar.gz"
+          # The signature must come from the key users are told to trust. This
+          # catches a wrong or rotated key in the secret before anyone downloads it.
+          status=$(gpg --batch --status-fd 1 --verify "$TARBALL.sig" "$TARBALL" 2>/dev/null || true)
+          printf '%s\n' "$status" | grep -qE "^\[GNUPG:\] VALIDSIG .*\b${fpr}\b" || {
+            echo "::error::Signature does not verify against GPG_FINGERPRINT ($fpr)."
+            exit 1
+          }
+          signer=$(printf '%s\n' "$status" | awk '$2 == "VALIDSIG" { print $3; exit }')
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # 3.0.3
+          # Users only have the published key, so it must include the signing subkey
+          if [ -n "$published" ] && ! GNUPGHOME=$PUB gpg --batch --quiet --verify "$TARBALL.sig" "$TARBALL" 2>/dev/null; then
+            echo "::error::Your key on $KEYSERVER can't verify this signature. Publish the signing subkey: gpg --keyserver $KEYSERVER --send-keys $primary"
+            exit 1
+          fi
+
+          # Expiry reminder, while there's still time to extend it
+          expires=$(gpg --batch --with-colons --list-keys "$primary" |
+            awk -F: -v s="$signer" '$1 == "pub" || $1 == "sub" { e = $7 } $1 == "fpr" && $10 == s { print e; exit }')
+          if [ -n "$expires" ]; then
+            days=$(( (expires - $(date +%s)) / 86400 ))
+            if [ "$days" -lt 60 ]; then
+              echo "::warning::Signing key $signer expires in $days days. On your laptop: gpg --quick-set-expire $primary 1y $signer && gpg --keyserver $KEYSERVER --send-keys $primary"
+            fi
+          fi
+          echo "Signed $TARBALL with $signer"
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          tag_name: ${{ env.VERSION }}
-          name: ${{ env.VERSION }}
-          files: |
-            wg-vpn-${{ env.VERSION }}.tar.gz
-            wg-vpn-${{ env.VERSION }}.tar.gz.sha256
-            wg-vpn-${{ env.VERSION }}.tar.gz.sig
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(env.VERSION, '-') }}
-          fail_on_unmatched_files: true
+          subject-path: ${{ env.TARBALL }}
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          flags=(--verify-tag --title "$GITHUB_REF_NAME")
+          if [ -s notes.md ]; then
+            flags+=(--notes-file notes.md)
+          else
+            flags+=(--generate-notes)
+          fi
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" "$TARBALL" "$TARBALL.sha256" "$TARBALL.sig"
