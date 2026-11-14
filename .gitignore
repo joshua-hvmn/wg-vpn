@@ -3,6 +3,11 @@
 *.state
 *.log
 
+# Build
+wg-vpn.tmp
+wg-vpn-*.tar.gz
+wg-vpn-*.tar.gz.sha256
+
 # Operating System
 .DS_Store
 thumbs.db

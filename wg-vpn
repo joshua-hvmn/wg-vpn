@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ufw's output is parsed, and it's translated: Python's gettext reads LANGUAGE
+# first, then LC_ALL, so LANG=C alone doesn't make it English
+export LC_ALL=C LANGUAGE=C
+
 if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3))); then
     echo "Error: This script requires Bash 4.3 or higher." >&2
     exit 1
@@ -36,9 +40,9 @@ DEPENDENCIES=(
 )
 declare -a ALLOWED_SUBNETS=()
 
-# Non-interactive mode: set NONINTERACTIVE=1, or run under CI / without a TTY.
+# Non-interactive mode: set NONINTERACTIVE=1, or run under CI.
 # When active, prompts take the safe default (or fail) instead of hanging.
-if [[ -n "${NONINTERACTIVE:-}" || -n "${CI:-}" ]]; then
+if [[ "${NONINTERACTIVE:-0}" != 0 || -n "${CI:-}" ]]; then
     NONINTERACTIVE=1
 else
     NONINTERACTIVE=0

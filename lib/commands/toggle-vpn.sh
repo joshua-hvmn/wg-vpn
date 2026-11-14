@@ -24,11 +24,18 @@ vpn_teardown() {
     info "Restoring UFW defaults and removing kill-switch rules"
 
     if [[ "$state_missing" -eq 1 ]]; then
-        load_config 2>/dev/null || true
-        if [[ -f "$CONFIG_PATH" ]]; then
-            parse_endpoint 2>/dev/null || true
+        # Best effort: nothing here may exit. load_config and parse_endpoint die
+        # on a config they can't use, which would leave the policy at deny, so
+        # read what's there and go on to _cleanup_vpn either way.
+        local wg_dir wg_file
+        wg_dir=$(get_env_var WG_CONFIG_DIR "$CONFIG_FILE")
+        wg_file=$(get_env_var WG_CONFIG_FILE "$CONFIG_FILE")
+        CONFIG_PATH="${wg_dir%/}/${wg_file}"
+        CONNECTION_NAME="${wg_file%.conf}"
+        if [[ -n "$wg_file" && -f "$CONFIG_PATH" ]] && (parse_endpoint) >/dev/null 2>&1; then
+            parse_endpoint
         else
-            warn "No state file and no WireGuard config; an endpoint rule may need manual removal."
+            warn "No state file and no usable WireGuard config; an endpoint rule may need manual removal."
         fi
         if [[ -f "$SUBNETS_FILE" ]]; then
             get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS" || true
@@ -64,6 +71,7 @@ cmd_toggle_on() {
 
     load_env
     parse_endpoint
+    require_numeric_endpoint
     capture_pre_vpn_state
     get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS"
 
@@ -85,7 +93,8 @@ cmd_toggle_on() {
     write_initial_state
 
     info "Applying UFW killswitch"
-    # allow handshake to vpn before denying traffic to allow ufw to resolve IP if given a domain name
+    # The endpoint rule goes in before the default deny, so the handshake is
+    # never blocked
     sudo ufw allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp
     sudo ufw default deny outgoing
     flush_established_flows

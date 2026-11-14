@@ -118,3 +118,38 @@ EOF
 	assert_log "nmcli connection delete test-vpn"
 	assert_log "sudo ufw default allow outgoing"
 }
+
+@test "wg-vpn up refuses a hostname endpoint before touching the firewall" {
+	: >"$MOCK_LOG"
+	sed -i 's/^Endpoint = .*/Endpoint = vpn.example.com:51820/' "$BATS_TEST_TMPDIR/test-vpn.conf"
+
+	run ./wg-vpn up
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Endpoint 'vpn.example.com'"*"is a hostname"* ]]
+	assert_not_log "sudo ufw allow out"
+	assert_not_log "sudo ufw default deny outgoing"
+}
+
+@test "wg-vpn down without a state file restores the policy even if the config is unusable" {
+	: >"$MOCK_LOG"
+	: >"$XDG_CONFIG_HOME/wg-vpn/wg-vpn.conf"
+
+	run ./wg-vpn down
+	[ "$status" -eq 0 ]
+	assert_log "sudo ufw default allow outgoing"
+
+	# ...or the WireGuard config has no Endpoint
+	: >"$MOCK_LOG"
+	printf 'WG_CONFIG_DIR="%s"\nWG_CONFIG_FILE="test-vpn.conf"\n' "$BATS_TEST_TMPDIR" >"$XDG_CONFIG_HOME/wg-vpn/wg-vpn.conf"
+	sed -i '/^Endpoint/d' "$BATS_TEST_TMPDIR/test-vpn.conf"
+
+	run ./wg-vpn down
+	[ "$status" -eq 0 ]
+	assert_log "sudo ufw default allow outgoing"
+}
+
+@test "wg-vpn version works from a checkout" {
+	run ./wg-vpn version
+	[ "$status" -eq 0 ]
+	[ "$output" = "wg-vpn $(tr -d '[:space:]' <VERSION)" ]
+}

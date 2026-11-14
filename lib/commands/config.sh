@@ -226,7 +226,7 @@ _cmd_config_wg_menu() {
     done
 }
 
-_cd_config_menu() {
+_cmd_config_menu() {
     while true; do
         echo ""
         info "wg-vpn Configuration"

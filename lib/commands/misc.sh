@@ -30,12 +30,14 @@ cmd_status() {
 }
 
 cmd_version() {
-    local ver="unknown"
-    if [[ -f "$LIB_DIR/../VERSION" ]]; then
-        ver=$(tr -d '[:space:]' <"$LIB_DIR/../VERSION")
-    elif [[ -f "$(dirname "$LIB_DIR")/VERSION" ]]; then
-        ver=$(tr -d '[:space:]' <"$(dirname "$LIB_DIR")/VERSION")
-    fi
+    local ver="unknown" f
+    # Installed, VERSION is next to the libraries; in a checkout, one level up
+    for f in "$LIB_DIR/VERSION" "$LIB_DIR/../VERSION"; do
+        if [[ -f "$f" ]]; then
+            ver=$(tr -d '[:space:]' <"$f")
+            break
+        fi
+    done
     printf 'wg-vpn %s\n' "$ver"
 }
 
