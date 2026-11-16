@@ -1,95 +1,199 @@
-# Standard prefixes and fallbacks
-XDG_DATA_HOME   ?= $(HOME)/.local/share
-XDG_CONFIG_HOME ?= $(HOME)/.config
-XDG_STATE_HOME  ?= $(HOME)/.local/state
+# ==================================================================================
+# wg-vpn Makefile
+# packager friendly, MIT license
+# Run `make help` for usage
+# ==================================================================================
 
-LOCAL_PREFIX	:= $(HOME)/.local
-DEFAULT_PREFIX  := /usr/local
+# Safety rules
+.POSIX:
+.DELETE_ON_ERROR:
 
-# Dynamic prefix selection 
-ifeq ($(DESTDIR),)
-	WRITABLE := $(shell test -w $(DEFAULT_PREFIX) 2>/dev/null && echo "yes" || (test -w $$(dirname $(DEFAULT_PREFIX)) 2>/dev/null && echo "yes") || echo "no")
-	ifeq ($(WRITABLE),no)
-		# User / non-root install -> XDG (immutable FHS directories)
-		PREFIX		?= $(LOCAL_PREFIX)
-		datadir		?= $(XDG_DATA_HOME)
-		sysconfdir  ?= $(XDG_CONFIG_HOME)/wg-vpn
-	else
-		# System Install (able to edit system directories)
-		PREFIX		?= $(DEFAULT_PREFIX)
-		datadir		?= $(PREFIX)/share
-		sysconfdir  ?= /etc/wg-vpn
-	endif
+# System tools
+SHELL			:= /bin/sh
+.SHELLFLAGS		:= -ec
+INSTALL			?= install
+INSTALL_PROGRAM ?= $(INSTALL) -m 755
+INSTALL_DATA	?= $(INSTALL) -m 644
+INSTALL_DIR     ?= $(INSTALL) -d -m 755
+FIND			?= find
+SED				?= sed
+RM				?= rm -f
+SHFMT			?= shfmt
+SHELLCHECK		?= shellcheck
+BATS			?= bats
+GIT				?= git
+
+# Standard directory variables
+DESTDIR			?=
+prefix		    ?= /usr/local
+exec_prefix     ?= $(prefix)
+bindir		    ?= $(exec_prefix)/bin
+datarootdir     ?= $(prefix)/share
+datadir			?= $(datarootdir)
+
+# App specific dirs
+applibdir	    := $(datadir)/wg-vpn
+
+# Files
+TARGET			:= wg-vpn
+TMP_TARGET		:= $(TARGET).tmp
+
+# `make dist` archives this ref under this name (the release workflow passes the tag)
+VERSION			:= $(shell cat VERSION 2>/dev/null)
+DIST_REF		?= HEAD
+DIST_NAME		?= $(TARGET)-$(VERSION)
+
+# packaging/ isn't in release tarballs, so it's linted only where it's there
+PACKAGING		:= packaging/render
+
+# Test Variables
+# Add variables to both to add dirs to the lint test
+test_libdir		?= lib
+test_testdir	?= test
+test_searchdirs := $(strip $(test_libdir) $(test_testdir))
+
+# Verbosity
+V				?= 0
+ifeq ($(V), 1)
+	Q :=
 else
-	# Upstream packaging environment context
-	PREFIX		?= /usr
-	datadir		?= $(PREFIX)/share
-	sysconfdir  ?= /etc/wg-vpn
+	Q := @
 endif
 
-bindir		 = $(PREFIX)/bin
-applibdir	 = $(datadir)/wg-vpn
+.PHONY: all help build install uninstall installcheck check lint test test-unit test-integration test-integration-host dist clean FORCE
 
-.PHONY: all install uninstall check test lint clean
+all: build ## Build the script (default target)
 
-all:
-	@echo "wg-vpn is a shell script and does not need to be compiled."
-	@echo " make install"
-	@echo " make check - lints and tests like CI"
-	@echo " make uninstall"
+help: ## Show this help message
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ { printf " %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST) | sort
 	@echo ""
 	@echo "Current Configuration:"
-	@echo " PREFIX      = $(PREFIX)"
+	@echo " prefix      = $(prefix)"
 	@echo " DESTDIR     = $(DESTDIR)"
-	@echo " sysconfdir  = $(sysconfdir)"
+	@echo " bindir      = $(bindir)"
 	@echo " applibdir   = $(applibdir)"
+	@echo ""
+	@echo "Override with e.g. 'make install prefix=/usr' or 'make V=1 install'."
 
-install:
-	@echo "Installing wg-vpn to $(DESTDIR)$(PREFIX)..."
-	install -d "$(DESTDIR)$(bindir)"
-	install -d "$(DESTDIR)$(applibdir)"
+build: $(TMP_TARGET) ## Inject install paths into a local copy of the script
 
-	# Install lib files to lib dir
-	if [ -d lib ]; then \
-		cp -RPp lib/. "$(DESTDIR)$(applibdir)"; \
-		find "$(DESTDIR)$(applibdir)" -type d -exec chmod 755 {} +; \
-		find "$(DESTDIR)$(applibdir)" -type f -name '*.sh' -exec chmod 644 {} +; \
+# Always rebuilt: the path baked in depends on prefix, which make can't see
+# changing between `make` and `make install prefix=...`
+$(TMP_TARGET): $(TARGET) FORCE
+	@printf ' %-8s %s\n' "SED" "$(TARGET) -> $(TMP_TARGET)"
+	$(Q)$(SED) -e "s|@LIBDIR@|$(applibdir)|g" $(TARGET) > $(TMP_TARGET)
+	$(Q)chmod +x $(TMP_TARGET)
+
+install: build ## Install the script and libraries (respects DESTDIR, prefix)
+	@printf ' %-8s %s\n' "DIR" "$(DESTDIR)$(bindir)"
+	$(Q)$(INSTALL_DIR) "$(DESTDIR)$(bindir)"
+	@printf ' %-8s %s\n' "INSTALL" "$(DESTDIR)$(bindir)/$(TARGET)"
+	$(Q)$(INSTALL_PROGRAM) $(TMP_TARGET) "$(DESTDIR)$(bindir)/$(TARGET)"
+	@if [ -d lib ]; then \
+		printf ' %-8s %s\n' "INSTALL" "$(DESTDIR)$(applibdir)/ (preserving layout)"; \
+		$(FIND) lib -type f -name '*.sh' -exec sh -c ' \
+			for file; do \
+				rel="$${file#lib/}"; \
+				dest="$(DESTDIR)$(applibdir)/$$rel"; \
+				$(INSTALL_DIR) "$$(dirname "$$dest")"; \
+				$(INSTALL_DATA) "$$file" "$$dest"; \
+			done \
+		' sh {} +; \
+	fi
+	@if [ -f VERSION ]; then \
+		$(INSTALL_DATA) VERSION "$(DESTDIR)$(applibdir)/VERSION"; \
 	fi
 
-	# Inject path constraints for LIB_DIR into installed entrypoint
-	sed -e 's%@LIBDIR@%$(applibdir)%g' wg-vpn > wg-vpn.tmp
-
-	# Install main executable to bin dir
-	install -m 755 wg-vpn.tmp "$(DESTDIR)$(bindir)/wg-vpn"
-	rm -f wg-vpn.tmp
-
-	@echo "Note: Config will be created on first run in $(sysconfdir)"
+	@echo "Note: Config will be created on first run in ~/.config/wg-vpn"
 	@echo "		 (or run 'wg-vpn init' to initialize an empty config)"
 	@echo "Installation complete."
 
-uninstall:
-	@echo "Uninstalling wg-vpn..."
-	rm -f "$(DESTDIR)$(bindir)/wg-vpn"
-	[ -n "$(applibdir)" ] && [ "$(applibdir)" != "/" ] && rm -rf "$(DESTDIR)$(applibdir)"
+uninstall: ## Remove installed system files
+	@printf ' %-8s %s\n' "RM" "$(DESTDIR)$(bindir)/$(TARGET)"
+	$(Q)$(RM) "$(DESTDIR)$(bindir)/$(TARGET)"
+	@if [ -d "$(DESTDIR)$(applibdir)" ]; then \
+		printf ' %-8s %s\n' "RM" "$(DESTDIR)$(applibdir)"; \
+		rm -rf "$(DESTDIR)$(applibdir)"; \
+	fi
 	@echo "Note: Configuration and state files left untouched."
 	@echo "To fully remove wg-vpn data:"
 	@echo "  rm -rf ~/.config/wg-vpn ~/.local/state/wg-vpn"
 	@echo "Uninstallation complete."
 
-lint:
-	shellcheck -x -s bash --source-path=SCRIPTDIR wg-vpn
-	if [ -d lib ]; then \
-		find lib -name '*.sh' -print0 | xargs -0 shellcheck -x -s bash --source-path=SCRIPTDIR; \
-		shfmt -l -d -i 4 wg-vpn lib/; \
-	else \
-		shfmt -l -d -i 4 wg-vpn; \
+# The temporary prefix has a space in it, to prove the quoting holds up.
+installcheck: ## Install into a temporary prefix, run that copy, then check uninstall leaves nothing
+	$(Q)tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	p="$$tmp/install root" && \
+	printf ' %-8s %s\n' "INSTALL" "$$p" && \
+	$(MAKE) --no-print-directory install prefix="$$p" >/dev/null && \
+	for f in core.sh routers.sh commands/misc.sh commands/config.sh commands/toggle-vpn.sh VERSION; do \
+		[ -f "$$p/share/wg-vpn/$$f" ] || { echo "error: $$f was not installed" >&2; exit 1; }; \
+	done && \
+	printf ' %-8s %s\n' "TEST" "$$p/bin/$(TARGET)" && \
+	"$$p/bin/$(TARGET)" help | grep -q 'Usage:' && \
+	have=$$("$$p/bin/$(TARGET)" version) && \
+	if [ "$$have" != "$(TARGET) $(VERSION)" ]; then \
+		echo "error: the installed copy says '$$have', not '$(TARGET) $(VERSION)'" >&2; exit 1; \
+	fi && \
+	printf ' %-8s %s\n' "UNINST" "$$p" && \
+	$(MAKE) --no-print-directory uninstall prefix="$$p" >/dev/null && \
+	left=$$($(FIND) "$$p" -type f -o -type l) && \
+	if [ -n "$$left" ]; then \
+		printf 'error: uninstall left these behind:\n%s\n' "$$left" >&2; exit 1; \
 	fi
 
-test:
-	bats --tap test/
+lint: ## Run shellcheck and shfmt over the script and libraries
+	@command -v $(SHELLCHECK) >/dev/null 2>&1 || { echo "error: shellcheck not found in PATH." >&2; exit 1; }
+	@command -v $(SHFMT) >/dev/null 2>&1 || { echo "error: shfmt not found in PATH." >&2; exit 1; }
+	@if [ -z "$(test_searchdirs)" ]; then \
+		echo "error: No search directories defined!" >&2; \
+		exit 1; \
+	fi
+	@for dir in $(test_searchdirs); do \
+		[ -d "$$dir" ] || { echo "error: Directory not found!" >&2; exit 1; }; \
+	done
+	@printf ' %-8s %s\n' "LINT" " Running shellcheck..."
+	$(Q)$(SHELLCHECK) -x -s bash --source-path=SCRIPTDIR $(TARGET)
+	$(Q)$(FIND) $(test_searchdirs) -type f \( -name '*.sh' -o -name '*.bash' \) \
+		-exec $(SHELLCHECK) -x -s bash --source-path=SCRIPTDIR {} +
+	$(Q)if [ -f $(PACKAGING) ]; then $(SHELLCHECK) $(PACKAGING); fi
+	@printf ' %-8s %s\n' "FMT" " Running shfmt..."
+	$(Q)$(SHFMT) -l -d -i 4 $(TARGET)
+	$(Q)$(FIND) $(TARGET) $(test_searchdirs) -type f \( -name '*.sh' -o -name '*.bash' \) \
+		-exec $(SHFMT) -l -d -i 4 {} +
+	$(Q)if [ -f $(PACKAGING) ]; then $(SHFMT) -l -d -i 4 $(PACKAGING); fi
 
-check: lint test
+test-unit: ## Run the mocked bats test suite
+	@command -v $(BATS) >/dev/null 2>&1 || { echo 'error: bats not found in path.' >&2; exit 1; }
+	@printf ' %-8s %s\n' "TEST" "Running unit tests..."
+	$(Q)$(BATS) --tap test/
 
-clean:
-	rm -f wg-vpn.tmp
-	# rm -rf /tmp/test-install-*
+test-integration: ## Run the kill-switch test suite in a docker container
+	@printf ' %-8s %s\n' "TEST" "Running kill-switch integration tests..."
+	$(Q)./test/integration/run.sh $(BATS_ARGS)
+
+test-integration-host: ## DESTRUCTIVE: run the kill-switch test suite on this host (CI runners only, use 'sudo -E')
+	@printf ' %-8s %s\n' "TEST" "Running kill-switch integration tests on THIS host..."
+	$(Q)if [ -z "$$CI" ]; then \
+		echo "refusing: this resets this machine's firewall and CI is not set." >&2; \
+		echo "run 'make test-integration' to use the container instead." >&2; \
+		exit 1; \
+	fi
+	$(Q)WGVPN_ALLOW_UFW_RESET=1 $(BATS) --print-output-on-failure \
+		test/integration/killswitch.bats $(BATS_ARGS)
+
+test: test-unit test-integration ## Run the full test suite
+
+check: lint test ## Run lint and test together
+
+dist: ## Archive DIST_REF as DIST_NAME.tar.gz plus a sha256 file (the release workflow runs this)
+	@printf ' %-8s %s\n' "ARCHIVE" "$(DIST_NAME).tar.gz"
+	$(Q)$(GIT) archive --format=tar.gz --prefix="$(DIST_NAME)/" -o "$(DIST_NAME).tar.gz" "$(DIST_REF)"
+	@printf ' %-8s %s\n' "SHA256" "$(DIST_NAME).tar.gz.sha256"
+	$(Q)sha256sum "$(DIST_NAME).tar.gz" >"$(DIST_NAME).tar.gz.sha256"
+
+clean: ## Remove build artifacts
+	@printf ' %-8s %s\n' "RM" "$(TMP_TARGET) $(DIST_NAME).tar.gz $(DIST_NAME).tar.gz.sha256"
+	$(Q)$(RM) $(TMP_TARGET) "$(DIST_NAME).tar.gz" "$(DIST_NAME).tar.gz.sha256"
+
+FORCE:

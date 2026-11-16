@@ -43,6 +43,7 @@ EOF
 	assert_log "sudo ufw allow out to 172.16.0.0/12"
 	assert_log "sudo ufw allow out to 192.168.0.0/16"
 	assert_log "nmcli connection up test-vpn"
+	assert_log_order "sudo ufw default deny outgoing" "nmcli connection up test-vpn"
 	assert_log "sudo ufw allow out on wg0"
 }
 
@@ -55,7 +56,6 @@ ENDPOINT_PORT="51820"
 CONNECTION_NAME="test-vpn"
 WG_IFACE="wg0"
 PREV_UFW_POLICY="allow"
-PREV_IPV6_STATE=0
 ALLOWED_SUBNET="192.168.1.0/24"
 EOF
 
@@ -68,11 +68,9 @@ EOF
 	fi
 	[ "$status" -eq 0 ]
 
-	assert_log "nmcli connection down test-vpn"
+	assert_log "nmcli connection delete test-vpn"
 	assert_log "sudo ufw delete allow out to 198.51.100.1 port 51820 proto udp"
 	assert_log "sudo ufw delete allow out to 192.168.1.0/24"
-	assert_log "sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0"
-	assert_log "sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0"
 	assert_log "sudo ufw default allow outgoing"
 }
 
@@ -88,11 +86,17 @@ if [[ "$*" == *"GENERAL.DEVICES"* ]]; then
 	exit 0
 fi
 
+# Report the connection as wg-vpn-managed
+if [[ "$*" == *"connection.description"* ]]; then
+	echo "wg-vpn-managed"
+	exit 0
+fi
+
 if [[ "$1" == "connection" && "$2" == "up" ]]; then
 	exit 1
 fi
 
-# 2. Fail connection check only if not imported
+# Fail connection check only if not imported
 if [[ "$1" == "connection" && "$2" == "show" ]]; then
 	grep -q "connection import" "$MOCK_LOG" && exit 0 || exit 1
 fi
@@ -113,4 +117,92 @@ EOF
 
 	assert_log "nmcli connection delete test-vpn"
 	assert_log "sudo ufw default allow outgoing"
+}
+
+@test "wg-vpn up refuses a hostname endpoint before touching the firewall" {
+	: >"$MOCK_LOG"
+	sed -i 's/^Endpoint = .*/Endpoint = vpn.example.com:51820/' "$BATS_TEST_TMPDIR/test-vpn.conf"
+
+	run ./wg-vpn up
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Endpoint 'vpn.example.com'"*"is a hostname"* ]]
+	assert_not_log "sudo ufw allow out"
+	assert_not_log "sudo ufw default deny outgoing"
+}
+
+@test "wg-vpn down without a state file restores the policy even if the config is unusable" {
+	: >"$MOCK_LOG"
+	: >"$XDG_CONFIG_HOME/wg-vpn/wg-vpn.conf"
+
+	run ./wg-vpn down
+	[ "$status" -eq 0 ]
+	assert_log "sudo ufw default allow outgoing"
+
+	# ...or the WireGuard config has no Endpoint
+	: >"$MOCK_LOG"
+	printf 'WG_CONFIG_DIR="%s"\nWG_CONFIG_FILE="test-vpn.conf"\n' "$BATS_TEST_TMPDIR" >"$XDG_CONFIG_HOME/wg-vpn/wg-vpn.conf"
+	sed -i '/^Endpoint/d' "$BATS_TEST_TMPDIR/test-vpn.conf"
+
+	run ./wg-vpn down
+	[ "$status" -eq 0 ]
+	assert_log "sudo ufw default allow outgoing"
+}
+
+@test "wg-vpn version works from a checkout" {
+	run ./wg-vpn version
+	[ "$status" -eq 0 ]
+	[ "$output" = "wg-vpn $(tr -d '[:space:]' <VERSION)" ]
+}
+
+@test "wg-vpn status never runs what the state file says" {
+	cat >"$XDG_STATE_HOME/wg-vpn/wg-vpn.state" <<STATE
+ENDPOINT_IP="198.51.100.1"
+ENDPOINT_PORT="51820"
+CONNECTION_NAME="test-vpn"
+PREV_UFW_POLICY="allow"
+WG_IFACE="\$(touch "$BATS_TEST_TMPDIR/ran")"
+STATE
+
+	run ./wg-vpn status
+	[ "$status" -eq 0 ]
+	[ ! -e "$BATS_TEST_TMPDIR/ran" ]
+	[[ "$output" == *"Endpoint    : 198.51.100.1:51820"* ]]
+	[[ "$output" == *"ignoring WG_IFACE"* ]]
+}
+
+@test "wg-vpn down passes only checked state values to ufw and nmcli" {
+	: >"$MOCK_LOG"
+	cat >"$XDG_STATE_HOME/wg-vpn/wg-vpn.state" <<STATE
+ENDPOINT_IP="--dry-run"
+ENDPOINT_PORT="51820"
+CONNECTION_NAME="test-vpn"
+WG_IFACE="-x"
+PREV_UFW_POLICY="allow --force"
+ALLOWED_SUBNET="--version"
+ALLOWED_SUBNET="192.168.1.0/24"
+LD_PRELOAD="/tmp/evil.so"
+STATE
+
+	run ./wg-vpn down
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"ignoring 'LD_PRELOAD'"* ]]
+	assert_not_log "--dry-run"
+	assert_not_log "--force"
+	assert_not_log "--version"
+	assert_not_log "out on -x"
+	# what's valid is still cleaned up, and the policy falls back to allow
+	assert_log "sudo ufw default allow outgoing"
+	assert_log "sudo ufw delete allow out to 192.168.1.0/24"
+	assert_log "nmcli connection delete test-vpn"
+}
+
+@test "wg-vpn up stops on a subnets.list entry that isn't a subnet, before arming" {
+	: >"$MOCK_LOG"
+	printf '%s\n' "10.0.0.0/8" "--reset" >"$XDG_CONFIG_HOME/wg-vpn/subnets.list"
+
+	run ./wg-vpn up
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"'--reset' in "*"is not an address or CIDR subnet"* ]]
+	assert_not_log "sudo ufw default deny outgoing"
+	assert_not_log "sudo ufw allow out"
 }

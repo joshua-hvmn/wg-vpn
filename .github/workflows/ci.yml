@@ -1,9 +1,8 @@
 name: CI
 on:
   push:
-    branches: [main, next]
+    branches: [main, next, "release/**", "hotfix/**"]
   pull_request:
-    branches: [main, next]
 
 permissions:
   contents: read
@@ -13,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  unit-tests:
     name: Lint and Test (${{ matrix.distro }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -31,7 +30,9 @@ jobs:
       image: ${{ matrix.image }}
       options: --user root
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install tools
         run: |
@@ -40,13 +41,10 @@ jobs:
           ubuntu|debian)
             apt-get update -qq
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-              shellcheck shfmt bats git ca-certificates make
+              shellcheck shfmt bats git ca-certificates make python3
             ;;
           arch)
-            pacman-key --init
-            pacman-key --populate archlinux
-            pacman -Sy --noconfirm archlinux-keyring
-            pacman -Syu --noconfirm shellcheck shfmt bats git make
+            pacman -Syu --noconfirm --needed shellcheck shfmt bats git make python
             ;;
           esac
         shell: bash
@@ -55,33 +53,56 @@ jobs:
         run: make lint
 
       - name: Test
-        run: make test
+        run: make test-unit
 
-      - name: Test Makefile Installation
+      # Installs into a temporary prefix, runs that copy (help, version), then
+      # checks that uninstall leaves nothing behind
+      - name: Install check
+        run: make installcheck
+
+  integration-test:
+    name: Kill-switch Integration Test
+    needs: unit-tests # Waits for fast tests to pass first
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Load the WireGuard module
+        run: sudo modprobe wireguard || echo "wireguard unavailable; the suite will use a veth"
+
+      - name: Run kill-switch integration suite
+        run: make test-integration
+
+  # The PKGBUILD a release would carry, checked by Arch's own tools: makepkg
+  # reads it (as .SRCINFO, what the AUR shows), and namcap lints it. The hash
+  # is a stand-in; the release fills in the real one.
+  recipes:
+    name: PKGBUILD (makepkg, namcap)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: archlinux:base-devel
+    steps:
+      # Without git, actions/checkout downloads an archive, which leaves out
+      # packaging/ (see .gitattributes)
+      - name: Install git and namcap
+        run: pacman -Syu --noconfirm --needed git namcap
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Render the recipe
         run: |
-          set -euo pipefail
-          # Install in CI container
-          make install PREFIX=/usr
+          version=$(tr -d '[:space:]' <VERSION)
+          packaging/render "v${version#v}" "$(printf '0%.0s' $(seq 64))" /tmp/recipes
 
-          # 1. Verify file placement
-          test -x "/usr/bin/wg-vpn"
-          test -d "/usr/share/wg-vpn"
-          test -f "/usr/share/wg-vpn/core.sh" 
-          test -f "/usr/share/wg-vpn/routers.sh" 
-          test -f "/usr/share/wg-vpn/commands/misc.sh"
-          test -f "/usr/share/wg-vpn/commands/toggle-vpn.sh" 
-
-          # 2. Verify sed injection patched local LIB_DIR
-          grep -q "/usr/share/wg-vpn" "/usr/bin/wg-vpn" || {
-            echo "ERROR: Makefile failed to patch LIB_DIR variable."
-            exit 1
-          }
-
-          # 3. Smoke test the installed binary
-          "/usr/bin/wg-vpn" help | grep -q "Usage:"
-
-          # 4. Verify uninstall cleanup
-          make uninstall PREFIX=/usr
-          test ! -e "/usr/bin/wg-vpn"
-          test ! -e "/usr/share/wg-vpn"
-        shell: bash
+      # makepkg won't run as root, which is what the container runs as
+      - name: makepkg --printsrcinfo and namcap
+        run: |
+          useradd --create-home builder
+          chown -R builder /tmp/recipes
+          cd /tmp/recipes
+          su builder -c 'makepkg --printsrcinfo' | tee .SRCINFO
+          namcap PKGBUILD

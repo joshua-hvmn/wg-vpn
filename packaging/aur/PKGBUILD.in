@@ -1,0 +1,38 @@
+# Maintainer: Joshua Haveman <192386592+joshua-hvmn@users.noreply.github.com>
+#
+# A template: packaging/render fills in the version and the tarball's sha256,
+# and every stable release's page has the result as PKGBUILD (with
+# PKGBUILD.sig), ready for the AUR. See packaging/README.md.
+#
+# Builds from the signed release tarball. makepkg checks the signature against
+# the primary key below; the tarball is signed by this repository's own subkey,
+# 09BF21950E80C72E5669E3BD46495073FA6EB22F. Import the key once with:
+#   gpg --recv-keys 4474376DA30B98D6FC34D217348CC5A7E89CC1CD
+
+pkgname=wg-vpn
+_name=wg-vpn # the project and tarball name, if pkgname ever differs
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='WireGuard client manager for NetworkManager, with a UFW kill-switch'
+arch=('any')
+url='https://github.com/joshua-hvmn/wg-vpn'
+license=('MIT')
+depends=('bash' 'networkmanager' 'ufw' 'sudo' 'iproute2' 'util-linux')
+optdepends=('conntrack-tools: cut connections opened before the kill-switch armed')
+checkdepends=('bash-bats' 'python')
+source=("$url/releases/download/v$pkgver/$_name-v$pkgver.tar.gz"{,.sig})
+sha256sums=('@SHA256@'
+    'SKIP')
+validpgpkeys=('4474376DA30B98D6FC34D217348CC5A7E89CC1CD') # Joshua Haveman
+
+check() {
+    cd "$_name-v$pkgver"
+    make test-unit
+}
+
+package() {
+    cd "$_name-v$pkgver"
+    make prefix=/usr DESTDIR="$pkgdir" install
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 -t "$pkgdir/usr/share/doc/$pkgname" README.md SECURITY.md CHANGELOG.md
+}

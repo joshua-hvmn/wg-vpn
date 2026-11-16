@@ -12,11 +12,32 @@ cmd_status() {
     echo "Config file : $WG_CONFIG_FILE"
     echo "Connection  : $CONNECTION_NAME"
     echo
+    if [[ -f "$STATE_FILE" ]]; then
+        echo "State       : active (kill-switch armed)"
+        load_state_file
+        [[ -n "${WG_IFACE:-}" ]] && echo "Interface   : $WG_IFACE"
+        [[ -n "${ENDPOINT_IP:-}" ]] && echo "Endpoint    : ${ENDPOINT_IP}:${ENDPOINT_PORT:-}"
+    else
+        echo "State       : inactive"
+    fi
+    echo
     nmcli -f GENERAL.STATE,IP4.ADDRESS,IP6.ADDRESS connection show "$CONNECTION_NAME" 2>/dev/null ||
         echo "(connection not present)"
     echo
     echo "UFW status (outgoing default):"
     sudo ufw status | head -20
+}
+
+cmd_version() {
+    local ver="unknown" f
+    # Installed, VERSION is next to the libraries; in a checkout, one level up
+    for f in "$LIB_DIR/VERSION" "$LIB_DIR/../VERSION"; do
+        if [[ -f "$f" ]]; then
+            ver=$(tr -d '[:space:]' <"$f")
+            break
+        fi
+    done
+    printf 'wg-vpn %s\n' "$ver"
 }
 
 usage() {
@@ -28,14 +49,11 @@ Commands:
   off, down     Deactivate WireGuard + restore outgoing traffic
   toggle        Switch between on/off automatically (Default)
   status, ps    Show current state
+  config        Manage WireGuard config path and allowed subnets
+  init          Initialize configuration files
+  version       Print version
 
 Configuration lives in:
   $CONFIG_FILE
 EOF
-}
-
-cmd_init_config_files() {
-    init_config
-    info "Configuration base files initialized at $CONFIG_DIR"
-    info "You can now edit $CONFIG_FILE and $SUBNETS_FILE before connecting to skip interactive setup."
 }

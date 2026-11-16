@@ -1,7 +1,9 @@
+bats_require_minimum_version 1.5.0
 setup_mocks() {
     # Create an isolated environment for config and state
     export XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/config"
     export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
+    export NONINTERACTIVE=1
     mkdir -p "$XDG_CONFIG_HOME/wg-vpn" "$XDG_STATE_HOME/wg-vpn"
 
     # Create dummy wg-vpn.conf so script passes init checks
@@ -39,6 +41,20 @@ echo "$cmd \$*" >> "$MOCK_LOG"
 if [[ "$cmd" == "nmcli" && "\$*" == *"GENERAL.DEVICES"* ]]; then
     echo "wg0"
 fi
+# Fake nmcli reporting the connection as wg-vpn-managed so
+# is_managed_connection() allows cleanup in tests.
+if [[ "$cmd" == "nmcli" && "\$*" == *"connection.description"* ]]; then
+    echo "wg-vpn-managed"
+fi
+# Fake ufw reporting itself active so check_ufw_active doesn't trip
+# the interactive "enable UFW?" prompt during tests.
+if [[ "$cmd" == "sudo" && "\$*" == "ufw status" ]]; then
+    echo "Status: active"
+fi
+if [[ "$cmd" == "sudo" && "\$*" == "ufw status verbose" ]]; then
+    echo "Status: active"
+    echo "Default: deny (incoming), allow (outgoing), disabled (routed)"
+fi
 EOF
         chmod +x "$MOCK_BIN_DIR/$cmd"
     done
@@ -64,4 +80,12 @@ assert_not_log() {
         cat "$MOCK_LOG" >&3
         return 1
     fi
+}
+
+assert_log_order() {
+    local first="$1" second="$2"
+    local l1 l2
+    l1=$(grep -nF -- "$first" "$MOCK_LOG" | head -1 | cut -d: -f1) # could return specific errors
+    l2=$(grep -nF -- "$second" "$MOCK_LOG" | head -1 | cut -d: -f1)
+    [ -n "$l1" ] && [ -n "$l2" ] && [ "$l1" -lt "$l2" ]
 }

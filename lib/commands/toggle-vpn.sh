@@ -4,47 +4,115 @@ if [[ "$ENTRYPOINT_LOADED" != "true" ]]; then
     exit 1
 fi
 
+vpn_teardown() {
+    local state_missing=0
+    if [[ ! -f "$STATE_FILE" ]]; then
+        warn "State file missing ($STATE_FILE)."
+        if [[ "${NONINTERACTIVE:-}" -eq 1 ]]; then
+            info "(non-interactive) attempting best-effort cleanup"
+            state_missing=1
+        elif yes_no "Attempt a best-effort cleanup based on default wg-vpn values to restore default internet access?"; then
+            state_missing=1
+        else
+            die "Aborted. UFW killswitch rules remain active."
+        fi
+    else
+        load_state_file
+        get_list_from_map_file "ALLOWED_SUBNET" "$STATE_FILE" "ALLOWED_SUBNETS" || true
+    fi
+
+    info "Restoring UFW defaults and removing kill-switch rules"
+
+    if [[ "$state_missing" -eq 1 ]]; then
+        # Best effort: nothing here may exit. load_config and parse_endpoint die
+        # on a config they can't use, which would leave the policy at deny, so
+        # read what's there and go on to _cleanup_vpn either way.
+        local wg_dir wg_file
+        wg_dir=$(get_env_var WG_CONFIG_DIR "$CONFIG_FILE")
+        wg_file=$(get_env_var WG_CONFIG_FILE "$CONFIG_FILE")
+        CONFIG_PATH="${wg_dir%/}/${wg_file}"
+        CONNECTION_NAME="${wg_file%.conf}"
+        if [[ -n "$wg_file" && -f "$CONFIG_PATH" ]] && (parse_endpoint) >/dev/null 2>&1; then
+            parse_endpoint
+        else
+            warn "No state file and no usable WireGuard config; an endpoint rule may need manual removal."
+        fi
+        if [[ -f "$SUBNETS_FILE" ]]; then
+            get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS" || true
+        fi
+    fi
+
+    _cleanup_vpn 0
+    info "VPN off, UFW killswitch rules deleted."
+}
+
+cmd_toggle_off() {
+    acquire_lock exclusive
+    sudo -v || die "Sudo privileges are required."
+    check_deps
+    vpn_teardown
+}
+
 cmd_toggle_on() {
     acquire_lock exclusive
     sudo -v || die "Sudo privileges are required."
     check_deps
+    check_ufw_active
+    check_ufw_ipv6
+
+    if [[ -f "$STATE_FILE" ]]; then
+        if yes_no "wg-vpn already active. Would you like to refresh the config and UFW rules?"; then
+            vpn_teardown
+        else
+            info "Aborted."
+            return 0
+        fi
+    fi
+
     load_env
     parse_endpoint
+    require_numeric_endpoint
     capture_pre_vpn_state
     get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS"
-    CONNECTION_IMPORTED=0
+    local entry
+    for entry in ${ALLOWED_SUBNETS[@]+"${ALLOWED_SUBNETS[@]}"}; do
+        valid_subnet "$entry" ||
+            die "'$entry' in $SUBNETS_FILE is not an address or CIDR subnet. Fix it with: wg-vpn config subnets"
+    done
 
     trap rollback_on_error EXIT
 
     if ! nmcli connection show "$CONNECTION_NAME" >/dev/null 2>&1; then
         info "Importing connection: $CONNECTION_NAME"
         nmcli connection import type wireguard file "$CONFIG_PATH"
-        CONNECTION_IMPORTED=1
-        export CONNECTION_IMPORTED
+        nmcli connection modify "$CONNECTION_NAME" connection.description "wg-vpn-managed"
+
         nmcli connection modify "$CONNECTION_NAME" ipv4.dns-priority -1
         nmcli connection modify "$CONNECTION_NAME" ipv6.dns-priority -1
+        nmcli connection modify "$CONNECTION_NAME" ipv4.dns-search "~."
+        nmcli connection modify "$CONNECTION_NAME" ipv6.dns-search "~."
     else
         info "Connection $CONNECTION_NAME already imported, skipping..."
     fi
 
+    write_initial_state
+
     info "Applying UFW killswitch"
-    # allow handshake to vpn before denying traffic to allow ufw to resolve IP if given a domain name
+    # The endpoint rule goes in before the default deny, so the handshake is
+    # never blocked
     sudo ufw allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp
-    # set default deny policy
     sudo ufw default deny outgoing
-    disable_ipv6 1
+    flush_established_flows
 
     info "Bringing connection up"
     if ! nmcli connection up "$CONNECTION_NAME"; then
         die "Failed to bring up VPN connection."
     fi
 
-    write_state_file
+    update_state_interface
 
-    # allow all traffic out on the vpn
     sudo ufw allow out on "$WG_IFACE"
 
-    # local/private ranges
     for subnet in "${ALLOWED_SUBNETS[@]}"; do
         sudo ufw allow out to "$subnet"
     done
@@ -53,75 +121,6 @@ cmd_toggle_on() {
     info "VPN + killswitch active ($CONNECTION_NAME on $WG_IFACE)"
 
     trap - EXIT
-}
-
-cmd_toggle_off() {
-    acquire_lock exclusive
-    sudo -v || die "Sudo privileges are required."
-    check_deps
-    load_env
-
-    local state_missing=0
-    if [[ ! -f "$STATE_FILE" ]]; then
-        info "Warning: State file missing ($STATE_FILE)."
-        if yes_no "Attempt a best-effort cleanup based on default wg-vpn values to restore default internet access?"; then
-            state_missing=1
-        else
-            die "Aborted. UFW killswitch rules remain active."
-        fi
-    else
-        load_state_file
-    fi
-
-    info "Bringing connection down"
-    nmcli connection down "$CONNECTION_NAME" 2>/dev/null || true
-
-    info "Restoring UFW defaults"
-
-    if [[ "$state_missing" -eq 1 ]]; then
-        parse_endpoint || true
-    fi
-
-    if [[ -n "${ENDPOINT_IP:-}" && -n "${ENDPOINT_PORT:-}" ]]; then
-        sudo ufw delete allow out to "$ENDPOINT_IP" port "$ENDPOINT_PORT" proto udp 2>/dev/null || true
-    fi
-    if [[ -n "${WG_IFACE:-}" ]]; then
-        sudo ufw delete allow out on "$WG_IFACE" 2>/dev/null || true
-    fi
-    if [[ -n "${PREV_IPV6_STATE:-}" ]]; then
-        disable_ipv6 "$PREV_IPV6_STATE"
-    else
-        disable_ipv6 0
-    fi
-
-    if [[ "$state_missing" -eq 0 ]]; then
-        get_list_from_map_file "ALLOWED_SUBNET" "$STATE_FILE" "ALLOWED_SUBNETS"
-    fi
-
-    if [[ "${#ALLOWED_SUBNETS[@]}" -eq 0 && -f "$SUBNETS_FILE" ]]; then
-        info "Falling back to subnets file for cleanup..."
-        get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS"
-    fi
-
-    for subnet in "${ALLOWED_SUBNETS[@]}"; do
-        sudo ufw delete allow out to "$subnet" 2>/dev/null || true
-    done
-
-    if [[ -n "${PREV_UFW_POLICY:-}" ]]; then
-        sudo ufw default "$PREV_UFW_POLICY" outgoing
-    else
-        info "No previous UFW policy found. Defaulting to 'allow' outgoing."
-        sudo ufw default allow outgoing
-    fi
-
-    sudo ufw reload
-
-    if [[ "$state_missing" -eq 0 ]]; then
-        info "Removing state file"
-        rm -f "$STATE_FILE"
-    fi
-
-    info "VPN off, UFW killswitch rules deleted."
 }
 
 cmd_toggle_switch() {
