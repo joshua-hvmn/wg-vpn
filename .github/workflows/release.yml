@@ -6,9 +6,11 @@
 #
 # Two jobs:
 #   build    checks, lint, tests (unit, kill-switch integration, install), tarball,
-#            release notes. No secrets, read-only token.
+#            release notes, and for a stable tag the AUR PKGBUILD
+#            (packaging/render). No secrets, read-only token.
 #   publish  runs in the `release` environment: waits for your approval, then signs
-#            the tarball with your GPG key, attests build provenance, and publishes.
+#            the tarball (and the PKGBUILD) with your GPG key, attests build
+#            provenance, and publishes.
 #            It never checks out or runs the repo's code, so the signing key is
 #            never in the same job as the test suite.
 #
@@ -89,6 +91,20 @@ jobs:
           # storage, so publish can tell if the tarball changed on the way
           echo "sha256=$(cut -d ' ' -f 1 "dist/$name.tar.gz.sha256")" >>"$GITHUB_OUTPUT"
 
+      # A stable release carries the AUR PKGBUILD, filled in with its version
+      # and the tarball's hash. A prerelease gets none: makepkg allows no '-'
+      # in pkgver, and packages follow stable releases. See packaging/README.md.
+      - name: Packaging recipe
+        id: recipes
+        if: steps.tag.outputs.prerelease == 'false'
+        env:
+          SHA256: ${{ steps.build.outputs.sha256 }}
+        run: |
+          packaging/render "$GITHUB_REF_NAME" "$SHA256" dist/
+          bash -n dist/PKGBUILD
+          # Its hash goes to publish as a job output too, like the tarball's
+          echo "pkgbuild=$(sha256sum dist/PKGBUILD | cut -d ' ' -f 1)" >>"$GITHUB_OUTPUT"
+
       # The CHANGELOG section for this version ("## v1.3.0 ..."); a prerelease
       # uses the section of the version it leads up to.
       - name: Release notes
@@ -111,6 +127,7 @@ jobs:
     outputs:
       prerelease: ${{ steps.tag.outputs.prerelease }}
       sha256: ${{ steps.build.outputs.sha256 }}
+      pkgbuild_sha256: ${{ steps.recipes.outputs.pkgbuild }}
 
   publish:
     needs: build
@@ -140,6 +157,16 @@ jobs:
             echo "::error::$TARBALL.sha256 doesn't match the hash build computed."
             exit 1
           }
+
+      # The PKGBUILD came through artifact storage too, so it's checked the
+      # same way, against the hash build passed as a job output
+      - name: Check the PKGBUILD against build's hash
+        if: needs.build.outputs.prerelease == 'false'
+        env:
+          PKGBUILD_SHA256: ${{ needs.build.outputs.pkgbuild_sha256 }}
+        run: |
+          [ -n "$PKGBUILD_SHA256" ] || { echo "::error::build passed no hash for the PKGBUILD."; exit 1; }
+          echo "$PKGBUILD_SHA256  PKGBUILD" | sha256sum -c -
 
       - name: Sign
         env:
@@ -208,6 +235,23 @@ jobs:
           fi
           echo "Signed $TARBALL with $signer"
 
+          # A stable release's PKGBUILD, with the same key
+          for f in PKGBUILD; do
+            [ -f "$f" ] || continue
+            printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+              --passphrase-fd 0 --local-user "$fpr" \
+              --detach-sign --armor --output "$f.sig" "$f" || {
+              echo "::error::Signing $f failed."
+              exit 1
+            }
+            status=$(gpg --batch --status-fd 1 --verify "$f.sig" "$f" 2>/dev/null || true)
+            printf '%s\n' "$status" | grep -qE "^\[GNUPG:\] VALIDSIG .*\b${fpr}\b" || {
+              echo "::error::The signature on $f does not verify against GPG_FINGERPRINT ($fpr)."
+              exit 1
+            }
+            echo "Signed $f with $signer"
+          done
+
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -226,4 +270,8 @@ jobs:
             flags+=(--generate-notes)
           fi
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
-          gh release create "$GITHUB_REF_NAME" "${flags[@]}" "$TARBALL" "$TARBALL.sha256" "$TARBALL.sig"
+          assets=("$TARBALL" "$TARBALL.sha256" "$TARBALL.sig")
+          if [ -f PKGBUILD ]; then
+            assets+=(PKGBUILD PKGBUILD.sig)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" "${assets[@]}"

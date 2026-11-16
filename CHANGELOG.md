@@ -12,6 +12,9 @@
 - A kill-switch integration suite (`make test-integration`): the real script against a real
   `ufw` in a container, probing for leaks over IPv4, IPv6, DNS and multicast.
 - `SECURITY.md` (what the kill-switch guarantees, and what it doesn't) and `CONTRIBUTING.md`.
+- Every stable release carries an AUR `PKGBUILD`, filled in with its version and the tarball's
+  hash and signed with the release key (`packaging/`). CI checks it with `makepkg --printsrcinfo`
+  and `namcap`.
 
 ### Changed
 
@@ -25,6 +28,9 @@
 - Teardown removes only a connection profile wg-vpn imported; one you made yourself is left
   alone.
 - `make install` follows the standard `prefix`/`DESTDIR` variables, for packaging.
+- What a file says is data: `subnets.list` entries, the WireGuard `Endpoint` and every value in
+  the state file are checked before they reach `ufw` or `nmcli`, and `status` no longer sources
+  the state file. `config subnets` refuses what isn't an address or CIDR subnet.
 - Release tarballs are built with `git archive` (`make dist`) and include the tests. A release
   is linted and tested, kill-switch suite included, before it is signed, and a stable tag must
   be on `main` with a matching `VERSION`.

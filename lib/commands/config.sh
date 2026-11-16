@@ -341,6 +341,7 @@ cmd_config_subnets() {
             _edit_list_file "rm" "$subnet" "$SUBNETS_FILE"
             info "Removed '$subnet' from allowed subnets (if it existed)."
         else
+            valid_subnet "$subnet" || die "'$subnet' is not an address or CIDR subnet (e.g. 192.168.1.0/24)."
             _edit_list_file "add" "$subnet" "$SUBNETS_FILE"
             info "Added '$subnet' to allowed subnets."
         fi
@@ -377,9 +378,13 @@ cmd_config_subnets() {
         a)
             local new_sub
             read -r -p "Enter CIDR subnet (e.g., 192.168.1.0/24): " new_sub
-            if [[ -n "$new_sub" ]]; then
+            if [[ -z "$new_sub" ]]; then
+                :
+            elif valid_subnet "$new_sub"; then
                 _edit_list_file "add" "$new_sub" "$SUBNETS_FILE"
                 info "Subnet added."
+            else
+                echo "Not an address or CIDR subnet: $new_sub" >&2
             fi
             ;;
         r)

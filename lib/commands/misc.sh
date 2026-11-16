@@ -14,8 +14,7 @@ cmd_status() {
     echo
     if [[ -f "$STATE_FILE" ]]; then
         echo "State       : active (kill-switch armed)"
-        # shellcheck disable=SC1090
-        source <(grep -E '^(WG_IFACE|ENDPOINT_IP|ENDPOINT_PORT)=' "$STATE_FILE" 2>/dev/null || true)
+        load_state_file
         [[ -n "${WG_IFACE:-}" ]] && echo "Interface   : $WG_IFACE"
         [[ -n "${ENDPOINT_IP:-}" ]] && echo "Endpoint    : ${ENDPOINT_IP}:${ENDPOINT_PORT:-}"
     else

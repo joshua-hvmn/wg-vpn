@@ -19,6 +19,27 @@ info() {
     printf '→ %s\n' "$*"
 }
 
+## What a file says is data: every value is checked before it reaches ufw or
+#  nmcli as an argument, so none can be read as an option, and nothing in a
+#  file is ever run.
+valid_address() { # an IPv4 or IPv6 address
+    [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && return 0
+    [[ "$1" == *:* && "$1" =~ ^[0-9A-Fa-f:.]+$ ]]
+}
+valid_subnet() { # an address, or address/prefix
+    [[ "$1" != */* ]] || [[ "${1#*/}" =~ ^[0-9]{1,3}$ ]] || return 1
+    valid_address "${1%%/*}"
+}
+valid_port() {
+    [[ "$1" =~ ^[0-9]{1,5}$ ]]
+}
+valid_iface() { # a Linux interface name
+    [[ "$1" != -* && "$1" =~ ^[A-Za-z0-9_.-]{1,15}$ ]]
+}
+valid_connection() { # an nmcli connection name
+    [[ -n "$1" && "$1" != -* && "$1" != *[[:cntrl:]]* ]]
+}
+
 ## Acquire lock on state
 #  USAGE: acquire_lock [shared|exclusive]
 #  - shared: for read-only ops (status), multiple readers but blocked if writer lock
@@ -75,6 +96,10 @@ _cleanup_vpn() {
     fi
     if [[ "${#ALLOWED_SUBNETS[@]}" -gt 0 ]]; then
         for subnet in "${ALLOWED_SUBNETS[@]}"; do
+            valid_subnet "$subnet" || {
+                warn "ignoring '$subnet': not an address or CIDR subnet"
+                continue
+            }
             sudo ufw delete allow out to "$subnet" >/dev/null 2>&1 || true
         done
     fi
@@ -416,6 +441,8 @@ load_config() {
 
     # Connection name = filename without .conf (nmcli default behaviour)
     CONNECTION_NAME="${WG_CONFIG_FILE%.conf}"
+    valid_connection "$CONNECTION_NAME" ||
+        die "WG_CONFIG_FILE '$WG_CONFIG_FILE' in $CONFIG_FILE can't name a connection (it starts with '-')."
     export CONFIG_PATH CONNECTION_NAME
 }
 
@@ -428,7 +455,9 @@ load_env() {
 load_state_file() {
     [[ -f "$STATE_FILE" ]] || die "State file missing ($STATE_FILE)."
 
-    local line key val
+    # Only the keys wg-vpn writes, and only values of the shape it writes:
+    # they become arguments to sudo ufw and nmcli
+    local key val ok
     while IFS='=' read -r key val || [[ -n "$key" ]]; do
         # strip whitespaces from key
         key="${key// /}"
@@ -439,6 +468,29 @@ load_state_file() {
         val="${val%\"}"
         val="${val#\'}"
         val="${val%\'}"
+
+        ok=1
+        case "$key" in
+        ENDPOINT_IP) valid_address "$val" || ok=0 ;;
+        ENDPOINT_PORT) valid_port "$val" || ok=0 ;;
+        CONNECTION_NAME) valid_connection "$val" || ok=0 ;;
+        WG_IFACE) valid_iface "$val" || ok=0 ;;
+        PREV_UFW_POLICY) [[ "$val" == allow || "$val" == deny || "$val" == reject ]] || ok=0 ;;
+        ALLOWED_SUBNET) continue ;; # a list: get_list_from_map_file reads it
+        PREV_IPV6_STATE)
+            # wg-vpn 0.1.x switched IPv6 off with sysctl; 0.2 leaves it to ufw
+            [[ "$val" == 0 ]] && warn "this session was started by wg-vpn 0.1.x, which switched IPv6 off. Switch it back on: sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0 net.ipv6.conf.default.disable_ipv6=0"
+            continue
+            ;;
+        *)
+            warn "ignoring '$key' in $STATE_FILE: not a key wg-vpn writes"
+            continue
+            ;;
+        esac
+        if [[ "$ok" -eq 0 ]]; then
+            warn "ignoring $key in $STATE_FILE: '$val' is not a value wg-vpn writes"
+            continue
+        fi
 
         declare -g -x "$key=$val"
     done <"$STATE_FILE"
@@ -481,7 +533,7 @@ parse_endpoint() {
 ## ufw rules take addresses, not names ("Bad destination address"), and a name
 #  couldn't be looked up again once outgoing traffic is denied
 require_numeric_endpoint() {
-    [[ "$ENDPOINT_IP" == *:* || "$ENDPOINT_IP" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && return 0
+    valid_address "$ENDPOINT_IP" && return 0
     die "Endpoint '$ENDPOINT_IP' in $CONFIG_PATH is a hostname, and wg-vpn needs an address. Look it up (getent ahosts $ENDPOINT_IP) and put the address in the config."
 }
 

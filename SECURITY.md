@@ -23,6 +23,9 @@
 7. **UFW must be active and IPv6-aware**  
    The kill-switch is never armed while UFW is inactive or `IPV6=yes` is not set in `/etc/default/ufw`. At a terminal, `wg-vpn` offers to fix either one first; without one (`NONINTERACTIVE=1`, CI) it stops.
 
+8. **Files are data**  
+   Nothing in a file is ever run. Every value `wg-vpn` reads (the `Endpoint` in a WireGuard config, the entries of `subnets.list`, the state file) is checked to be the kind of value it should be (an address, a subnet, a port, an interface or connection name, a policy) before it becomes an argument to `sudo ufw` or `nmcli`. A value that isn't is refused or ignored, with a warning; it can't be read as an option.
+
 ## Deliberate trade-offs
 
 ### Inbound control channels

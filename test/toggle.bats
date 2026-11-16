@@ -153,3 +153,56 @@ EOF
 	[ "$status" -eq 0 ]
 	[ "$output" = "wg-vpn $(tr -d '[:space:]' <VERSION)" ]
 }
+
+@test "wg-vpn status never runs what the state file says" {
+	cat >"$XDG_STATE_HOME/wg-vpn/wg-vpn.state" <<STATE
+ENDPOINT_IP="198.51.100.1"
+ENDPOINT_PORT="51820"
+CONNECTION_NAME="test-vpn"
+PREV_UFW_POLICY="allow"
+WG_IFACE="\$(touch "$BATS_TEST_TMPDIR/ran")"
+STATE
+
+	run ./wg-vpn status
+	[ "$status" -eq 0 ]
+	[ ! -e "$BATS_TEST_TMPDIR/ran" ]
+	[[ "$output" == *"Endpoint    : 198.51.100.1:51820"* ]]
+	[[ "$output" == *"ignoring WG_IFACE"* ]]
+}
+
+@test "wg-vpn down passes only checked state values to ufw and nmcli" {
+	: >"$MOCK_LOG"
+	cat >"$XDG_STATE_HOME/wg-vpn/wg-vpn.state" <<STATE
+ENDPOINT_IP="--dry-run"
+ENDPOINT_PORT="51820"
+CONNECTION_NAME="test-vpn"
+WG_IFACE="-x"
+PREV_UFW_POLICY="allow --force"
+ALLOWED_SUBNET="--version"
+ALLOWED_SUBNET="192.168.1.0/24"
+LD_PRELOAD="/tmp/evil.so"
+STATE
+
+	run ./wg-vpn down
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"ignoring 'LD_PRELOAD'"* ]]
+	assert_not_log "--dry-run"
+	assert_not_log "--force"
+	assert_not_log "--version"
+	assert_not_log "out on -x"
+	# what's valid is still cleaned up, and the policy falls back to allow
+	assert_log "sudo ufw default allow outgoing"
+	assert_log "sudo ufw delete allow out to 192.168.1.0/24"
+	assert_log "nmcli connection delete test-vpn"
+}
+
+@test "wg-vpn up stops on a subnets.list entry that isn't a subnet, before arming" {
+	: >"$MOCK_LOG"
+	printf '%s\n' "10.0.0.0/8" "--reset" >"$XDG_CONFIG_HOME/wg-vpn/subnets.list"
+
+	run ./wg-vpn up
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"'--reset' in "*"is not an address or CIDR subnet"* ]]
+	assert_not_log "sudo ufw default deny outgoing"
+	assert_not_log "sudo ufw allow out"
+}

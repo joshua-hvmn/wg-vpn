@@ -2,3 +2,4 @@
 .gitattributes export-ignore
 .gitignore export-ignore
 .gitworkflow export-ignore
+packaging/ export-ignore

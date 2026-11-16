@@ -74,3 +74,35 @@ jobs:
 
       - name: Run kill-switch integration suite
         run: make test-integration
+
+  # The PKGBUILD a release would carry, checked by Arch's own tools: makepkg
+  # reads it (as .SRCINFO, what the AUR shows), and namcap lints it. The hash
+  # is a stand-in; the release fills in the real one.
+  recipes:
+    name: PKGBUILD (makepkg, namcap)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: archlinux:base-devel
+    steps:
+      # Without git, actions/checkout downloads an archive, which leaves out
+      # packaging/ (see .gitattributes)
+      - name: Install git and namcap
+        run: pacman -Syu --noconfirm --needed git namcap
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Render the recipe
+        run: |
+          version=$(tr -d '[:space:]' <VERSION)
+          packaging/render "v${version#v}" "$(printf '0%.0s' $(seq 64))" /tmp/recipes
+
+      # makepkg won't run as root, which is what the container runs as
+      - name: makepkg --printsrcinfo and namcap
+        run: |
+          useradd --create-home builder
+          chown -R builder /tmp/recipes
+          cd /tmp/recipes
+          su builder -c 'makepkg --printsrcinfo' | tee .SRCINFO
+          namcap PKGBUILD

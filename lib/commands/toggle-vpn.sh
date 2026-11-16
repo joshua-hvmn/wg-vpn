@@ -74,6 +74,11 @@ cmd_toggle_on() {
     require_numeric_endpoint
     capture_pre_vpn_state
     get_list_from_list_file "$SUBNETS_FILE" "ALLOWED_SUBNETS"
+    local entry
+    for entry in ${ALLOWED_SUBNETS[@]+"${ALLOWED_SUBNETS[@]}"}; do
+        valid_subnet "$entry" ||
+            die "'$entry' in $SUBNETS_FILE is not an address or CIDR subnet. Fix it with: wg-vpn config subnets"
+    done
 
     trap rollback_on_error EXIT
 

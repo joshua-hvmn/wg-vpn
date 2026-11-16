@@ -83,3 +83,14 @@ conf_val() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"wg-vpn Configuration"* ]]
 }
+
+@test "config subnets refuses what isn't an address or CIDR subnet" {
+	run ./wg-vpn config subnets "--reset"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"is not an address or CIDR subnet"* ]]
+	run ! grep -qF -- "--reset" "$XDG_CONFIG_HOME/wg-vpn/subnets.list"
+
+	run ./wg-vpn config subnets "fd00:1234::/48"
+	[ "$status" -eq 0 ]
+	grep -qxF "fd00:1234::/48" "$XDG_CONFIG_HOME/wg-vpn/subnets.list"
+}

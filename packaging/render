@@ -1,0 +1,46 @@
+#!/bin/sh
+# packaging/render <vX.Y.Z> <sha256> <directory>
+#
+# Fill in the AUR PKGBUILD for a stable release: aur/PKGBUILD.in, with
+# @VERSION@ (X.Y.Z) and @SHA256@ (of wg-vpn-vX.Y.Z.tar.gz), into
+# <directory>/PKGBUILD. The release workflow runs it for every stable tag and
+# attaches the result to the release; see packaging/README.md.
+#
+# A prerelease gets no recipe: makepkg allows no '-' in pkgver, and packages
+# follow stable releases.
+
+set -eu
+
+die() {
+    printf 'render: %s\n' "$*" >&2
+    exit 1
+}
+
+[ "$#" -eq 3 ] || {
+    printf 'usage: %s <vX.Y.Z> <sha256 of wg-vpn-vX.Y.Z.tar.gz> <directory>\n' "$0" >&2
+    exit 2
+}
+version=$1 sha256=$2 out=${3%/}
+
+# Checked before they go near sed: digits and dots, and 64 hex digits
+printf '%s\n' "$version" | grep -Eqx 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' ||
+    die "'$version' is not a stable vX.Y.Z version; prereleases get no recipes."
+printf '%s\n' "$sha256" | grep -Eqx '[0-9a-f]{64}' ||
+    die "'$sha256' is not a sha256 (64 lowercase hex digits)."
+
+templates=$(dirname -- "$0")
+mkdir -p -- "$out"
+
+# render_one <template> <output>
+render_one() {
+    sed -e "s/@VERSION@/${version#v}/g" -e "s/@SHA256@/$sha256/g" "$templates/$1" >"$out/$2.tmp" ||
+        die "couldn't render $1."
+    if grep -n '@[A-Z0-9_]*@' "$out/$2.tmp" >&2; then
+        rm -f -- "$out/$2.tmp"
+        die "$1 has placeholders render doesn't fill (above)."
+    fi
+    mv -- "$out/$2.tmp" "$out/$2"
+    printf '%s\n' "$out/$2"
+}
+
+render_one aur/PKGBUILD.in PKGBUILD

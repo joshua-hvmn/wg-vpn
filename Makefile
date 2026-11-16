@@ -43,6 +43,9 @@ VERSION			:= $(shell cat VERSION 2>/dev/null)
 DIST_REF		?= HEAD
 DIST_NAME		?= $(TARGET)-$(VERSION)
 
+# packaging/ isn't in release tarballs, so it's linted only where it's there
+PACKAGING		:= packaging/render
+
 # Test Variables
 # Add variables to both to add dirs to the lint test
 test_libdir		?= lib
@@ -153,10 +156,12 @@ lint: ## Run shellcheck and shfmt over the script and libraries
 	$(Q)$(SHELLCHECK) -x -s bash --source-path=SCRIPTDIR $(TARGET)
 	$(Q)$(FIND) $(test_searchdirs) -type f \( -name '*.sh' -o -name '*.bash' \) \
 		-exec $(SHELLCHECK) -x -s bash --source-path=SCRIPTDIR {} +
+	$(Q)if [ -f $(PACKAGING) ]; then $(SHELLCHECK) $(PACKAGING); fi
 	@printf ' %-8s %s\n' "FMT" " Running shfmt..."
 	$(Q)$(SHFMT) -l -d -i 4 $(TARGET)
 	$(Q)$(FIND) $(TARGET) $(test_searchdirs) -type f \( -name '*.sh' -o -name '*.bash' \) \
 		-exec $(SHFMT) -l -d -i 4 {} +
+	$(Q)if [ -f $(PACKAGING) ]; then $(SHFMT) -l -d -i 4 $(PACKAGING); fi
 
 test-unit: ## Run the mocked bats test suite
 	@command -v $(BATS) >/dev/null 2>&1 || { echo 'error: bats not found in path.' >&2; exit 1; }
