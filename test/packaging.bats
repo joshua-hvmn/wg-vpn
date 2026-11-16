@@ -9,8 +9,8 @@ render() {
 	"$REPO_ROOT/packaging/render" "$@"
 }
 
-setup_file() {
-	[ -x "$BATS_TEST_DIRNAME/../packaging/render" ] || skip "packaging/ isn't here (a release tarball)"
+setup() {
+	[ -x "$REPO_ROOT/packaging/render" ] || skip "packaging/ isn't here (a release tarball)"
 }
 
 @test "render: fills in the version and the hash, and leaves no placeholders" {
